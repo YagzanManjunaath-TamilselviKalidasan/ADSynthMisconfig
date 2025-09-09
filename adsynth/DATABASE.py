@@ -213,3 +213,12 @@ SEC_DIST_GROUPS = list()
 
 LOCAL_ADMINS = list() # not processed names
 
+
+# Added for misconfigurations
+MISCONFIGURED_SESSION_COMPUTERS = list()
+
+MISCONFIGURED_SESSION_USERS = list()
+
+MISCONFIGURED_SESSION = dict()
+
+

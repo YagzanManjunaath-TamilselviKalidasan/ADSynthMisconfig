@@ -1,4 +1,5 @@
-from adsynth.DATABASE import ADMIN_USERS, ENABLED_USERS, LOCAL_ADMINS, PAW_TIERS, S_TIERS, SECURITY_GROUPS, WS_TIERS, edge_operation, get_node_index
+from adsynth.DATABASE import ADMIN_USERS, ENABLED_USERS, LOCAL_ADMINS, PAW_TIERS, S_TIERS, SECURITY_GROUPS, WS_TIERS, \
+    edge_operation, get_node_index, MISCONFIGURED_SESSION
 from adsynth.adsynth_templates.admin_groups import get_admin_groups
 from adsynth.adsynth_templates.permissions import get_non_acls_list
 from adsynth.entities.acls import cn
@@ -7,6 +8,8 @@ from adsynth.templates.acls import get_acls_list
 from adsynth.templates.groups import get_departments_list
 from adsynth.utils.parameters import get_dict_param_value, get_int_param_value, get_perc_param_value
 import random
+
+from adsynth.DATABASE import MISCONFIGURED_SESSION_COMPUTERS,MISCONFIGURED_SESSION_USERS
 
 def create_misconfig_sessions_multi_tiers(nTiers, num_users, security_level, parameters):
     if nTiers < 2:
@@ -257,3 +260,132 @@ def create_misconfig_group_nesting(domain, nTiers, security_level, parameters, n
         start_index = get_node_index(regular_group_name + "_Group", "name")
         end_index = get_node_index(cn(target_group_name, domain) + "_Group", "name")
         edge_operation(start_index, end_index, "MemberOf")
+
+
+
+##
+# Assumption : Low tier computer is considered as a entry point and We check for path from this computer to domain admin
+# Same user - Based on edge from Computer to domain is chosen and msiconfiguration is injected
+
+##
+# Check hasSession computer -> users are entry points  : Check path to domain admin
+#
+#
+##
+def create_misconfig_sessions_from_entrypoints_multi_tiers(nTiers, num_users, security_level, parameters):
+    if nTiers < 2:
+        pass
+
+    # Assuming 1% of misconfigurations
+    perc_misconfig_sessions = 0.01
+
+    #todo  Lower start
+    num_misconfig = int(perc_misconfig_sessions * num_users)
+    print(num_misconfig)
+
+    for i in range(num_misconfig):
+        is_admin = random.choice([True, False])
+
+        # Specify the user' tier
+        ut = random.randrange(0, nTiers - 1)
+
+        # Sample a user at the specified tier
+        lowest_tier_no_admin = min(2, nTiers - 1)
+        if is_admin or ut < lowest_tier_no_admin:
+            user = random.choice(ADMIN_USERS[ut])
+        else:
+            try:
+                user = random.choice(ENABLED_USERS[ut])
+            except:
+                continue
+
+        # Determine computer's tier
+        ct = random.randrange(ut + 1, nTiers)
+
+        # Sample a computer
+        if ct == 0:  # PAW
+            comp = random.choice(PAW_TIERS[0])
+        elif ct == 1 and nTiers > 2:  # Servers
+            comp = random.choice(PAW_TIERS[ct] + S_TIERS[ct])
+        else:  # Workstations
+            comp = random.choice(PAW_TIERS[ct] + S_TIERS[ct] + WS_TIERS[ct])
+
+        # Generate a session
+        start_index = get_node_index(comp + "_Computer", "name")
+        end_index = get_node_index(user + "_User", "name")
+        edge_operation(start_index, end_index, "HasSession")
+
+        MISCONFIGURED_SESSION_COMPUTERS.append(comp)
+        MISCONFIGURED_SESSION_USERS.append(user)
+
+        MISCONFIGURED_SESSION[comp] = user
+
+        # todo - Use HasSession to do simulate similar admin user to log into lower tier computer
+    # print("Misconfigured Sessions")
+    # print(MISCONFIGURED_SESSION)
+
+
+
+
+
+def create_misconfig_permissions_on_individuals_from_entrypoints(nTiers, A, EU, security_level, parameters, num_users):
+    if nTiers == 1:
+        return
+    CP = ["AdminTo", "CanRDP", "CanPSRemote", "ExecuteDCOM", "AllowedToDelegate", "ReadLAPSPassword", "SQLAdmin",
+          "AllowedToAct"]
+    misconfig_perc = get_perc_param_value("perc_misconfig_permissions", security_level, parameters) / 100
+    num_misconfig = int(misconfig_perc * num_users)
+
+    misconfig_to_tier_0_allow, misconfig_to_tier_0_limit = get_misconfig_dict_param_value(
+        "misconfig_permissions_to_tier_0", parameters)
+    # print("Misconfig" ,num_misconfig)
+    for i in range(num_misconfig):
+        # Specify the user' tier
+        lowest_tier_no_admin = min(2, nTiers - 1)
+        ut = random.randrange(lowest_tier_no_admin, nTiers)
+
+        # Sample a user at the specified tier
+        try:
+            user = random.choice(EU[ut])
+        except:
+            continue
+
+        # Determine computer's tier
+        if nTiers < 2:
+            ct = 0
+        else:
+            if misconfig_to_tier_0_allow:
+                if misconfig_to_tier_0_limit < 0 or misconfig_to_tier_0_limit > 0:
+                    ct = random.randrange(0, ut)
+                    misconfig_to_tier_0_limit -= 1
+                else:
+                    try:
+                        ct = random.randrange(1, ut)
+                    except:
+                        continue
+            else:
+                try:
+                    ct = random.randrange(1, ut)
+                except:
+                    continue
+
+        # Sample a computer
+        if ct == 0:  # PAW
+            comp = random.choice(PAW_TIERS[0])
+        elif ct == 1 and nTiers > 2:  # Servers
+            comp = random.choice(PAW_TIERS[ct] + S_TIERS[ct])
+        else:  # Workstations
+            comp = random.choice(PAW_TIERS[ct] + S_TIERS[ct] + WS_TIERS[ct])
+
+        # Generate a session
+        start_index = get_node_index(user + "_User", "name")
+        end_index = get_node_index(comp + "_Computer", "name")
+        rel_type = random.choice(CP)
+        edge_operation(start_index, end_index, rel_type)
+        MISCONFIGURED_SESSION_COMPUTERS.append(comp)
+        MISCONFIGURED_SESSION_USERS.append(user)
+
+        MISCONFIGURED_SESSION[comp] = user
+
+        # print("Misconfigured Sessions")
+        # print(MISCONFIGURED_SESSION)

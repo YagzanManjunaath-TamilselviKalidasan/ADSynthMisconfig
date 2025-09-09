@@ -61,7 +61,7 @@ DEFAULT_CONFIGURATIONS = {
         "sidhistory": 10,
         "unconstraineddelegation": 20,
         "savedcredentials": 40,
-        "Kerberoastable" : [3, 5],
+        "Kerberoastable": [3, 5],
         "sessionsPercentages": [10, 10, 10],
         "priority_session_weight": 3,
         "perc_special_roles": 10
@@ -77,7 +77,7 @@ DEFAULT_CONFIGURATIONS = {
         "nResourcesThresholds": [20, 50],
         "nLocalAdminsPerDepartment": [5, 10],
         "nOUsPerLocalAdmins": [3, 5],
-        "nGroupsPerUsers": [3,5]
+        "nGroupsPerUsers": [3, 5]
     },
     "GPO": {
         "nGPOs": 170,
@@ -103,20 +103,20 @@ DEFAULT_CONFIGURATIONS = {
             "ExecuteDCOM": 25,
             "AllowedToDelegate": 25,
             "ReadLAPSPassword": 25
-        }        
+        }
     },
     "perc_misconfig_sessions": {
-        "Low": 10, 
+        "Low": 10,
         "High": 1,
         "Customized": 10
     },
     "perc_misconfig_permissions": {
-        "Low": 10, 
+        "Low": 10,
         "High": 1,
         "Customized": 10
     },
     "perc_misconfig_permissions_on_groups": {
-        "Low": 100, 
+        "Low": 100,
         "High": 80,
         "Customized": 80
     },
@@ -150,6 +150,8 @@ DEFAULT_CONFIGURATIONS = {
     "convert_to_directed_graphs": 0,
     "seed": 1
 }
+
+
 
 
 def get_complementary_value(value):

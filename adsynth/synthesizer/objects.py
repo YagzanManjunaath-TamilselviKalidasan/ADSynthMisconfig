@@ -133,7 +133,6 @@ def generate_computers(domain_name, domain_sid, num_nodes, computers, current_ti
     creddump_perc = get_perc_param_value("Computer", "creddump", parameters)
     exploitable_perc = get_perc_param_value("Computer", "exploitable", parameters)
 
-    
  
     # PC List
     computer_type_perc = get_dict_param_value("Computer", "computerProbability", parameters)

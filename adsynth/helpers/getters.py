@@ -1,6 +1,6 @@
 import re
 from adsynth.DATABASE import DISABLED_USERS, DISTRIBUTION_GROUPS, ENABLED_USERS, FOLDERS, S_TIERS_LOCATIONS, WS_TIERS_LOCATIONS
-from adsynth.adsynth_templates.default_config import DEFAULT_CONFIGURATIONS
+from adsynth.adsynth_templates.default_config import DEFAULT_CONFIGURATIONS,DEFAULT_CONFIGURATIONS 
 from adsynth.adsynth_templates.servers import T1_SERVERS
 from adsynth.templates.groups import get_departments
 from adsynth.templates.ous import STATES
@@ -10,14 +10,14 @@ def get_list_perc_param_value(node, key, parameters):
     try:
         list = parameters[node][key]
         if len(list) != 3:
-            return DEFAULT_CONFIGURATIONS[node][key]
+            return DEFAULT_CONFIGURATIONS [node][key]
         
         for i in range(len(list)):
             if list[i] < 0 or list[i] > 100:
                 list[i] = 100       
         return list
     except:
-        return DEFAULT_CONFIGURATIONS[node][key]
+        return DEFAULT_CONFIGURATIONS [node][key]
 
 def get_misconfig_dict_param_value(node, parameters):
     try:
@@ -26,9 +26,9 @@ def get_misconfig_dict_param_value(node, parameters):
             if (value["allow"] == 0 or value["allow"] == 1) and type(value["limit"]) == int:
                 return value["allow"], int(value["limit"])
             else:
-                return DEFAULT_CONFIGURATIONS[node]
+                return DEFAULT_CONFIGURATIONS [node]
     except:
-        return DEFAULT_CONFIGURATIONS[node]
+        return DEFAULT_CONFIGURATIONS [node]
 
 def get_single_int_param_value(key, parameters):
     try:
@@ -36,9 +36,9 @@ def get_single_int_param_value(key, parameters):
         if type(value) == int and value >= 0:
             return value
         else:
-            return DEFAULT_CONFIGURATIONS[key]
+            return DEFAULT_CONFIGURATIONS [key]
     except:
-        return DEFAULT_CONFIGURATIONS[key]
+        return DEFAULT_CONFIGURATIONS [key]
 
 def get_num_tiers(parameters):
     try:
@@ -46,9 +46,9 @@ def get_num_tiers(parameters):
         if type(value) == int and value > 0:
             return value
         else:
-            return DEFAULT_CONFIGURATIONS["nTiers"]
+            return DEFAULT_CONFIGURATIONS ["nTiers"]
     except:
-        return DEFAULT_CONFIGURATIONS["nTiers"]
+        return DEFAULT_CONFIGURATIONS ["nTiers"]
         
 def get_list_param_value(node, key, parameters):
     try:
@@ -56,9 +56,9 @@ def get_list_param_value(node, key, parameters):
         if type(value) == list:
             return value
         else:
-            return DEFAULT_CONFIGURATIONS[node][key]
+            return DEFAULT_CONFIGURATIONS [node][key]
     except:
-        return DEFAULT_CONFIGURATIONS[node][key]
+        return DEFAULT_CONFIGURATIONS [node][key]
 
 def get_threshold_values(node, key, parameters):
     try:
@@ -66,9 +66,9 @@ def get_threshold_values(node, key, parameters):
         if type(value) == list and len(value) == 2 and value[0] > 0 and value[1] >= value[0]:
             return value
         else:
-            return DEFAULT_CONFIGURATIONS[node][key] 
+            return DEFAULT_CONFIGURATIONS [node][key]
     except:
-        return DEFAULT_CONFIGURATIONS[node][key]
+        return DEFAULT_CONFIGURATIONS [node][key]
 
 def get_total_resources(tier, nTiers, locations, parameters, object_types = ["C"]):
         resources = list()
@@ -159,6 +159,6 @@ def get_t1_servers():
 def get_locations(parameters):
     num_locations = get_single_int_param_value("nLocations", parameters)
     if num_locations > len(STATES) or num_locations == 0:
-        num_locations = DEFAULT_CONFIGURATIONS["nLocations"]
+        num_locations = DEFAULT_CONFIGURATIONS ["nLocations"]
         
     return STATES[:num_locations]    
