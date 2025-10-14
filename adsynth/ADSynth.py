@@ -17,6 +17,8 @@ import uuid
 import time
 import random
 import os
+
+import networkx
 from tabulate import tabulate
 import pandas as pd
 from IPython.display import display
@@ -54,11 +56,27 @@ from adsynth.utils.domains import get_domain_dn
 from adsynth.utils.parameters import print_all_parameters, get_int_param_value, get_perc_param_value
 from adsynth.adsynth_templates.default_config import DEFAULT_CONFIGURATIONS
 from adsynth.DATABASE import *
-from adsynth.utils.misconfig_utils import update_db, check_shortest_paths_from_misconfigured_users, \
-    update_db_with_temp_file, create_networkx_graph, draw_graph
+from adsynth.utils.misconfig_utils import update_db, check_shortest_paths_from_misconfigured_users_using_cypher, \
+    update_db_with_temp_file
+from adsynth.utils.networkx_utils import create_networkx_graph, draw_graph, find_shortest_paths_from_misconfig_users, \
+    calculate_total_paths_to_domain_admins, find_user_count_with_path_to_DA, find_user_count_with_path_to_DA_undirected
 import json
 from timeit import default_timer as timer
 from datetime import datetime
+
+from adsynth.utils.plot_utils import plot_plot_chart
+
+
+def delete_neo4j_data(session):
+    try:
+        query = '''
+          MATCH (n)
+        DETACH DELETE n
+        '''
+        print("Clearing conencted neo4j db")
+        session.run(query)
+    except Exception as e:
+        print(f"Exception occurred while clearing Neo4j db {e}")
 
 
 def reset_DB():
@@ -99,6 +117,14 @@ def reset_DB():
 
     KERBEROASTABLES.clear()  # processed names
 
+    MISCONFIGURED_SESSION_COMPUTERS.clear()
+    MISCONFIGURED_SESSION_USERS.clear()
+    MISCONFIGURED_SESSION.clear()
+
+    MISCONFIGURED_PERMISSION_COMPUTERS.clear()
+    MISCONFIGURED_PERMISSION_USERS.clear()
+    MISCONFIGURED_PERMISSION.clear()
+
 
 neo4j = None
 
@@ -126,11 +152,11 @@ class Messages():
     :  :       \   |   |  .`\  |;  |  |--`,---, |  ' :|   :  :  | ||    :     | |   | : _' | 
     :  |   /\   \  :   : |  '  ||  :  ;_ /___/ \.  : |:   |   \ | :;    |.';  ; :   : |.'  | 
     |  :  ' ;.   : |   ' '  ;  : \  \    `.  \  \ ,' '|   : '  '; |`----'  |  | |   ' '  ; : 
-    |  |  ;/  \   \\'   | ;  .  |  `----.   \  ;  `  ,''   ' ;.    ;    '   :  ; '   |  .'. | 
+    |  |  ;/  \   \|'   | ;  .  |  `----.   \  ;  `  ,''   ' ;.    ;    '   :  ; '   |  .'. | 
     '  :  | \  \ ,'|   | :  |  '  __ \  \  |\  \    ' |   | | \   |    |   |  ' |   | :  | ' 
     |  |  '  '--'  '   : | /  ;  /  /`--'  / '  \   | '   : |  ; .'    '   :  | '   : |  : ; 
     |  :  :        |   | '` ,/  '--'.     /   \  ;  ; |   | '`--'      ;   |.'  |   | '  ,/  
-    |  | ,'        ;   :  .'      `--'---'     :  \  \\'   : |          '---'    ;   : ;--'   
+    |  | ,'        ;   :  .'      `--'---'     :  \  ||'   : |          '---'    ;   : ;--'   
     `--''          |   ,.'                      \  ' ;;   |.'                   |   ,/       
                    '---'                         `--` '---'                     '---'        
                                                                                              
@@ -201,7 +227,7 @@ class MainMenu(cmd.Cmd):
         self.json_file_name = None
         self.level = "Customized"
         self.dbname = None
-
+        self.no_misconfig = True
         cmd.Cmd.__init__(self)
 
     def cmdloop(self):
@@ -664,6 +690,7 @@ class MainMenu(cmd.Cmd):
         all_admins, all_enabled_users = segregate_list(users, [perc_admin, 100 - perc_admin])
 
         # Segregate admins and misconfigured admins in regular Users OU
+
         misconfig_admin_regular_perc = get_perc_param_value("nodeMisconfig", "admin_regular", self.parameters)
         if misconfig_admin_regular_perc > 50:
             misconfig_admin_regular_perc = DEFAULT_CONFIGURATIONS["nodeMisconfig"]["admin_regular"]
@@ -729,8 +756,9 @@ class MainMenu(cmd.Cmd):
         print("Generate sessions")
         create_sessions(nTiers, PAW_TIERS, S_TIERS, WS_TIERS, self.parameters)
 
-        print("Generate cross-tier sessions")
-        create_misconfig_sessions(nTiers, self.level, self.parameters, len(enabled_users) + len(admin))
+        if not self.no_misconfig:
+            print("Generate cross-tier sessions")
+            create_misconfig_sessions(nTiers, self.level, self.parameters, len(enabled_users) + len(admin))
 
         # Print Operators and Server Operators can log into Domain Controllers
         # Idea Ref: Microsoft, https://learn.microsoft.com/en-us/windows-server/identity/ad-ds/manage/understand-security-groups
@@ -742,16 +770,18 @@ class MainMenu(cmd.Cmd):
         print("Generating non-ACL permissions")
         create_control_management_permissions(self.domain, nTiers, False, self.parameters, convert_to_digraph)
 
-        print("Generating misconfigured non-ACL permissions on individuals")
-        create_misconfig_permissions_on_individuals(nTiers, ADMIN_USERS, ENABLED_USERS, self.level, self.parameters,
-                                                    len(enabled_users) + len(admin))
+        if not self.no_misconfig:
+            print("Generating misconfigured non-ACL permissions on individuals")
+            create_misconfig_permissions_on_individuals(nTiers, ADMIN_USERS, ENABLED_USERS, self.level, self.parameters,
+                                                        len(enabled_users) + len(admin))
 
-        print("Generating misconfigured permissions on sets - From groups to OUs")
-        num_local_admin_groups = sum(len(subarray) for subarray in LOCAL_ADMINS)
-        create_misconfig_permissions_on_groups(self.domain, nTiers, self.level, self.parameters, num_local_admin_groups)
+            print("Generating misconfigured permissions on sets - From groups to OUs")
+            num_local_admin_groups = sum(len(subarray) for subarray in LOCAL_ADMINS)
+            create_misconfig_permissions_on_groups(self.domain, nTiers, self.level, self.parameters,
+                                                   num_local_admin_groups)
 
-        print("Generating misconfigured membership - Group Nesting")
-        create_misconfig_group_nesting(self.domain, nTiers, self.level, self.parameters, num_regular_groups)
+            print("Generating misconfigured membership - Group Nesting")
+            create_misconfig_group_nesting(self.domain, nTiers, self.level, self.parameters, num_regular_groups)
 
         # -------------------------------------------------------------
         #  Generate ACL Permissions, including genericall, genericwrite, writeowner, ....
@@ -793,43 +823,57 @@ class MainMenu(cmd.Cmd):
             print("Number of ", i, " = ", len(NODE_GROUPS[i]))
 
         perc_misconfig_sessions = get_perc_param_value("perc_misconfig_sessions", "Low", self.parameters) / 100
-        num_misconfig = int(perc_misconfig_sessions * (len(enabled_users) + len(admin)))
-        print(
-            f"Number of regular users = {len(enabled_users) + len(admin)} --- Num misconfig sessions = {num_misconfig}")
+        if not self.no_misconfig:
+            num_misconfig = int(perc_misconfig_sessions * (len(enabled_users) + len(admin)))
+            print(
+                f"Number of regular users = {len(enabled_users) + len(admin)} --- Num misconfig sessions = {num_misconfig}")
+            perc_misconfig_permissions = get_perc_param_value("perc_misconfig_permissions", "Low",
+                                                              self.parameters) / 100
+            num_misconfig = int(perc_misconfig_permissions * (len(enabled_users) + len(admin)))
+            print(
+                f"Number of regular users = {len(enabled_users) + len(admin)} --- Num misconfig permissions = {num_misconfig}")
+        else:
 
-        perc_misconfig_permissions = get_perc_param_value("perc_misconfig_permissions", "Low", self.parameters) / 100
-        num_misconfig = int(perc_misconfig_permissions * (len(enabled_users) + len(admin)))
-        print(
-            f"Number of regular users = {len(enabled_users) + len(admin)} --- Num misconfig permissions = {num_misconfig}")
+            print(
+                f"Number of regular users = {len(enabled_users) + len(admin)}")
 
-        print("Dump to JSON file")
+            print(
+                f"Number of regular users = {len(enabled_users) + len(admin)}  ")
+
         current_datetime = datetime.now()
         # Format the date and time to include seconds
         filename = current_datetime.strftime("%Y-%m-%d_%H-%M-%S-%f")[:-3]
+        if self.no_misconfig:
+            print("Dump to JSON file")
 
-        with open(f"generated_datasets/{filename}.json", "w") as f:
-            for obj in NODES:
-                obj["type"] = "node"
-                # Use json.dumps() to convert the object to a JSON string without square brackets
-                json_str = json.dumps(obj, separators=(',', ':'))
-                # Write the JSON string to the file with a newline character
-                f.write(json_str + '\n')
+            with open(
+                    f"/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/CodeSpace/ADSynth/generated_datasets/{filename}.json",
+                    "w") as f:
+                for obj in NODES:
+                    obj["type"] = "node"
+                    # Use json.dumps() to convert the object to a JSON string without square brackets
+                    json_str = json.dumps(obj, separators=(',', ':'))
+                    # Write the JSON string to the file with a newline character
+                    f.write(json_str + '\n')
 
-        # Open the file in append mode
-        with open(f"generated_datasets/{filename}.json", 'a') as f:
-            print(f"generated_datasets/{filename}.json")
-            for obj in EDGES:
-                # Use json.dumps() to convert the object to a JSON string without square brackets
-                json_str = json.dumps(obj, separators=(',', ':'))
-                # Write the JSON string to the file with a newline character
-                f.write(json_str + '\n')
+            # Open the file in append mode
+            with open(
+                    f"/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/CodeSpace/ADSynth/generated_datasets/{filename}.json",
+                    'a') as f:
+                print(f"generated_datasets/{filename}.json")
+                for obj in EDGES:
+                    # Use json.dumps() to convert the object to a JSON string without square brackets
+                    json_str = json.dumps(obj, separators=(',', ':'))
+                    # Write the JSON string to the file with a newline character
+                    f.write(json_str + '\n')
 
-        self.dbname = filename
+            self.dbname = filename
         # ===============================================
 
         end_ = timer()
         print("Execution time = ", end_ - start_)
 
+        update_db_with_temp_file(self.driver.session(), "create")
         path = f"{os.getcwd()}/generated_datasets/{filename}.json"
         query = f"PROFILE CALL apoc.periodic.iterate(\"CALL apoc.import.json('{path}')\", \"RETURN 1\", {{batchSize:1000}})"
         # session.run(query)
@@ -843,8 +887,7 @@ class MainMenu(cmd.Cmd):
         session.run(query)
         print("Graph exported in", json_path)
 
-
-    def do_initialise_AD_graph_from_json(self,args):
+    def do_initialise_AD_graph_from_json(self, args):
         global neo4j
         neo4j = safe_import_neo4j()
         if neo4j is None:
@@ -856,7 +899,7 @@ class MainMenu(cmd.Cmd):
         print("DB Username: {}".format(self.username))
         print("DB Password: {}".format(self.password))
         print("Use encryption: {}".format(self.use_encryption))
-        continue_with_configured_db =  True
+        continue_with_configured_db = True
         # self.m.input_yesno(
         #     "Do you wish to continue with this Db config?",False))
         if not continue_with_configured_db:
@@ -890,19 +933,32 @@ class MainMenu(cmd.Cmd):
                 pass
 
         if not is_params_set:
-                json_path = self.m.input_default(
-                    "Parameters JSON file (copy and paste the full path of your parameter JSON file)",
-                    self.parameters_json_path)
-                self.parameters = get_parameters_from_json(json_path)
-                if self.parameters == DEFAULT_CONFIGURATIONS:
-                    self.parameters_json_path = "DEFAULT"
-                else:
-                    self.parameters_json_path = json_path
-                args = json_path
-                print_all_parameters(self.parameters)
+            json_path = self.m.input_default(
+                "Parameters JSON file (copy and paste the full path of your parameter JSON file)",
+                self.parameters_json_path)
+            self.parameters = get_parameters_from_json(json_path)
+            if self.parameters == DEFAULT_CONFIGURATIONS:
+                self.parameters_json_path = "DEFAULT"
+            else:
+                self.parameters_json_path = json_path
+            args = json_path
+            print_all_parameters(self.parameters)
 
         self.do_generate(args)
 
+    def do_test_all_configs(self,args):
+        config_list = [
+            "/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/CodeSpace/ADSynth/adsynth/experiment_params/secure_1k.json  High",
+            "/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/CodeSpace/ADSynth/adsynth/experiment_params/secure_5k.json  High",
+            "/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/CodeSpace/ADSynth/adsynth/experiment_params/secure_10k.json  High",
+            "/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/CodeSpace/ADSynth/adsynth/experiment_params/vul_1k.json Low",
+            "/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/CodeSpace/ADSynth/adsynth/experiment_params/vul_5k.json Low",
+            "/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/CodeSpace/ADSynth/adsynth/experiment_params/vul_10k.json Low"]
+
+        for config in config_list:
+            self.do_initialise_AD_graph_from_json(config)
+            self.do_inject_session_misconfigs("")
+            self.do_inject_permission_misconfigs("")
 
     def do_initialise_1k_AD(self, args):
         global neo4j
@@ -926,7 +982,7 @@ class MainMenu(cmd.Cmd):
             self.parameters_json_path = "DEFAULT"
         else:
             self.parameters_json_path = json_path
-
+        delete_neo4j_data(self.driver.session())
         print_all_parameters(self.parameters)
         self.level = "High"
         self.do_generate(args)
@@ -937,60 +993,145 @@ class MainMenu(cmd.Cmd):
         num_users = get_int_param_value("User", "nUsers", self.parameters)
         print("====================================================================")
         print("== Injecting Session Misconfigurations ==")
-        rows = {}
-        for itr in range(1, 2):
+        user_level_metrics = {}
+        misconfig_growth_metrics = {}
+        # Assuming Max of 30% of misconfigurations
+        max_perc_misconfig_sessions = 0.2
+
+        num_misconfig = int(max_perc_misconfig_sessions * num_users)
+        print(num_misconfig)
+
+        domain_grp = "DOMAIN ADMINS@TESTLAB.LOCALE"
+
+        nx_attack_graph = create_networkx_graph()
+        for misconfig_session_count in range(1, num_misconfig):
             # todo Change after getting Custom params
-            # create_misconfig_sessions(nTiers, self.level,self.parameters, num_users)
+            # create_misconfig_sessisons(nTiers, self.level,self.parameters, num_users)
+            # print(f"Injecting misconfiguration {len(MISCONFIGURED_SESSION_USERS)}")
 
-            nx_attack_graph = create_networkx_graph()
-            create_misconfig_sessions_from_entrypoints_multi_tiers(nTiers,num_users, self.level, self.parameters)
+            nx_attack_graph = create_misconfig_sessions_from_entrypoints_multi_tiers(nTiers, nx_attack_graph,
+                                                                                     self.level, self.parameters)
 
-            session = self.driver.session()
-            # update_db_with_temp_file(session,"session_mc")
+            # find_shortest_paths_from_misconfig_users(nx_attack_graph, misconfig_session_count, domain_grp,user_level_metrics)
+            find_user_count_with_path_to_DA(nx_attack_graph, domain_grp, misconfig_session_count,
+                                            misconfig_growth_metrics)
 
+        # user_df = pd.DataFrame.from_dict(user_level_metrics, orient="index")
+        #
+        # pd.set_option('display.max_columns', None)
+        #
+        # # display(df)
+        # print(tabulate(user_df.head(30), headers="keys", tablefmt="psql"))
+        # print("====================================================================")
+        # print("Shape", user_df.shape)
+        #
+        # misconfig_df = pd.DataFrame.from_dict(misconfig_growth_metrics, orient="index")
+        #
+        # pd.set_option('display.max_columns', None)
+        #
+        # print(tabulate(misconfig_df.head(30), headers="keys", tablefmt="psql"))
+        # print("====================================================================")
+        # print("Shape", misconfig_df.shape)
+        #
+        #
 
-            check_shortest_paths_from_misconfigured_users(session, itr,rows,"DOMAIN ADMINS@TESTLAB.LOCALE")
+        number_of_misconfigs = sorted(misconfig_growth_metrics.keys())
+        reachable_users_count = [misconfig_growth_metrics[k]["reachable_users_count"] for k in number_of_misconfigs]
+        reachable_comps_count = [misconfig_growth_metrics[k]["reachable_comps_count"] for k in number_of_misconfigs]
 
-        df = pd.DataFrame(rows)
-        pd.set_option('display.max_columns', None)
+        num_misconfig = int(max_perc_misconfig_sessions * num_users)
+        print(num_misconfig)
 
-        # display(df)
-        print(tabulate(df, headers="keys", tablefmt="psql"))
-        print("====================================================================")
-        print("Shape", df.shape)
+        base_filename = os.path.basename(self.parameters_json_path)
+
+        additional_info = {"Total users": num_users, "Number of Misconfigs": num_misconfig,
+                           "Percentage of Misconfig sessions": max_perc_misconfig_sessions, "Base file": base_filename}
+        plot_plot_chart(number_of_misconfigs, reachable_users_count, "Number of Misconfigured Sessions",
+                        "Number of Reachable Users", "Reachable Users (computers in all tiers) vs Misconfiguration Sessions", additional_info,
+                        "line")
+        plot_plot_chart(number_of_misconfigs, reachable_comps_count, "Number of Misconfigured Sessions",
+                        "Number of Reachable Computers", "Reachable Computers (computers in all tiers) vs Misconfiguration Sessions",
+                        additional_info, "line")
+
+        session = self.driver.session()
+        delete_neo4j_data(session)
+        update_db_with_temp_file(session, "session_mc")
+
+        print("Misconfigured Sessions")
+        print(MISCONFIGURED_SESSION)
 
     def do_inject_permission_misconfigs(self, args):
+
         nTiers = get_num_tiers(self.parameters)
         num_users = get_int_param_value("User", "nUsers", self.parameters)
         print("====================================================================")
         print("== Injecting Permission Misconfigurations ==")
-        nx_attack_graph = None
-        create_networkx_graph(nx_attack_graph)
-        create_networkx_graph(nx_attack_graph)
-        draw_graph(nx_attack_graph)
-        rows = {}
-        for itr in range(1, 10):
-            # todo Change after getting Custom params
-            # create_misconfig_sessions(nTiers, self.level,self.parameters, num_users)
-            # Using naive misconfig now. We can use admin from prev misconfig to simulate
 
-            create_misconfig_permissions_on_individuals_from_entrypoints(nTiers, ADMIN_USERS, ENABLED_USERS, self.level, self.parameters,
-                                                       num_users)
+        # number of iterations -- original code used range(1,10) ; keep that but allow config
+        num_iterations = int(self.parameters.get("perm_misconfig_iterations", 10)) if isinstance(self.parameters,
+                                                                                                 dict) else 10
 
-            nx_attack_graph = None
-            create_networkx_graph(nx_attack_graph)
-            draw_graph(nx_attack_graph)
-            # session = self.driver.session()
-            # update_db_with_temp_file(session, "perm_mc")
+        nx_attack_graph = create_networkx_graph()
 
-            # check_shortest_paths_from_misconfigured_users(session, itr, rows, "DOMAIN ADMINS@TESTLAB.LOCALE")
+        misconfig_perc = get_perc_param_value("perc_misconfig_permissions", self.level, self.parameters) / 100
+        num_misconfig = int(misconfig_perc * num_users)
 
-        df = pd.DataFrame(rows)
+        misconfig_growth_metrics = {}
+        for itr in range(num_misconfig):
 
-        pd.set_option('display.max_columns', None)
+                nx_attack_graph = create_misconfig_permissions_on_individuals_from_entrypoints(
+                    nTiers,
+                    ADMIN_USERS,
+                    ENABLED_USERS,
+                    self.level,
+                    self.parameters,
+                    num_users,
+                    nx_attack_graph
+                )
 
-        # display(df)
-        print(tabulate(df, headers="keys", tablefmt="psql"))
-        print("====================================================================")
-        print("Shape", df.shape)
 
+                domain_grp = "DOMAIN ADMINS@TESTLAB.LOCALE"
+
+                find_user_count_with_path_to_DA(
+                    nx_attack_graph,
+                    domain_grp,
+                    itr,
+                    misconfig_growth_metrics
+                )
+
+
+        number_of_misconfigs = sorted(misconfig_growth_metrics.keys())
+        reachable_users_count = [misconfig_growth_metrics[k]["reachable_users_count"] for k in number_of_misconfigs]
+        reachable_comps_count = [misconfig_growth_metrics[k]["reachable_comps_count"] for k in number_of_misconfigs]
+
+
+        base_filename = os.path.basename(self.parameters_json_path)
+        additional_info = {"Total users": num_users, "Number of Permission Misconfigs": num_misconfig,
+                            "Base file": base_filename}
+        plot_plot_chart(number_of_misconfigs, reachable_users_count, "Number of Misconfigured Permissions",
+                        "Number of Reachable Users",
+                        "Reachable Users  vs Misconfiguration Permissions", additional_info,
+                        "line")
+        plot_plot_chart(number_of_misconfigs, reachable_comps_count, "Number of Misconfigured Permissions",
+                        "Number of Reachable Computers",
+                        "Reachable Computers  vs Misconfiguration Permissions",
+                        additional_info, "line")
+
+        # df = pd.DataFrame(rows)
+        # pd.set_option("display.max_columns", None)
+        # print(tabulate(df.head(10), headers="keys", tablefmt="psql"))
+        # print("====================================================================")
+        # print("Shape", df.shape)
+
+        # final persistence and summary
+        try:
+            session = self.driver.session()
+            delete_neo4j_data(session)
+            update_db_with_temp_file(session, "perm_mc_final")
+        except Exception:
+            pass
+
+        print("Final Misconfigured Sessions (permissions):")
+        print(MISCONFIGURED_SESSION)
+
+        return nx_attack_graph

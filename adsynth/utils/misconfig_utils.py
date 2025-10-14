@@ -6,6 +6,7 @@ import networkx as nx
 from adsynth.DATABASE import NODES, EDGES, MISCONFIGURED_SESSION, MISCONFIGURED_SESSION_USERS
 import matplotlib.pyplot as plt
 
+
 def populate_admin_users(NODES):
     pass
 
@@ -42,28 +43,8 @@ def update_db(session, operation):
     session.close()
 
 
-def draw_graph(nx_attack_graph):
-    plt.figure(figsize=(8, 6))
-    nx.draw_networkx(nx_attack_graph, with_labels=True, node_color="lightblue")
-    plt.show()
-
-def create_networkx_graph():
-    nx_attack_graph = nx.DiGraph()
-
-    for n in NODES:
-        node_id = n["id"]
-        props = n.get("properties", {})
-        nx_attack_graph.add_node(node_id, **props)
-
-    for e in EDGES:
-        src = e["start"]["id"]
-        target = e["end"]["id"]
-        props = e.get("properties", {})
-        nx_attack_graph.add_edge(src, target, **props)
-
-    return nx_attack_graph
-
-def check_shortest_paths_from_misconfigured_users(nx_attack_graph, round, rows, domain_grp_name):
+# todo Should we include only exploitable permissions
+def check_shortest_paths_from_misconfigured_users_using_cypher(session, round, rows, domain_grp_name):
     for user in MISCONFIGURED_SESSION_USERS:
         query = f"""
             MATCH (u:User {{name:'{user}'}}),
@@ -92,8 +73,7 @@ def check_shortest_paths_from_misconfigured_users(nx_attack_graph, round, rows, 
             # })
 
 
-# todo Should we include only exploitable permissions
-def check_shortest_paths_from_misconfigured_users(session, round, rows, domain_grp_name):
+def check_shortest_paths_from_misconfigured_users_using_cypher(session, round, rows, domain_grp_name):
     for user in MISCONFIGURED_SESSION_USERS:
         query = f"""
             MATCH (u:User {{name:'{user}'}}),
