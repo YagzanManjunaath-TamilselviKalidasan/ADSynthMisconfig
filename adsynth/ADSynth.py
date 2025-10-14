@@ -23,6 +23,7 @@ from tabulate import tabulate
 import pandas as pd
 from IPython.display import display
 
+from adsynth.EXPERIMENT_DATABASE import EXP_ADMIN_USERS, EXP_ENABLED_USERS, EXP_MISCONFIGURED_SESSION
 from adsynth.default_ad_system.default_acls import create_administrators_acls, create_default_AllExtendedRights, \
     create_default_GenericAll, create_default_GenericWrite, create_default_dc_groups_acls, create_default_groups_acls, \
     create_default_owns, create_default_users_acls, create_default_write_dacl_owner, create_domain_admins_acls, \
@@ -52,6 +53,7 @@ from adsynth.synthesizer.security_policies import apply_gpos, apply_restriction_
     place_gpos_in_container
 from adsynth.synthesizer.sessions import create_dc_sessions, create_sessions
 from adsynth.utils.data import get_names_pool, get_surnames_pool, get_parameters_from_json, get_domains_pool
+from adsynth.utils.database_utils import init_experiment_state
 from adsynth.utils.domains import get_domain_dn
 from adsynth.utils.parameters import print_all_parameters, get_int_param_value, get_perc_param_value
 from adsynth.adsynth_templates.default_config import DEFAULT_CONFIGURATIONS
@@ -945,6 +947,7 @@ class MainMenu(cmd.Cmd):
             print_all_parameters(self.parameters)
 
         self.do_generate(args)
+        init_experiment_state()
 
     def do_test_all_configs(self,args):
         config_list = [
@@ -995,8 +998,8 @@ class MainMenu(cmd.Cmd):
         print("== Injecting Session Misconfigurations ==")
         user_level_metrics = {}
         misconfig_growth_metrics = {}
-        # Assuming Max of 30% of misconfigurations
-        max_perc_misconfig_sessions = 0.2
+        # Assuming Max of 10% of misconfigurations for fine grained analysis
+        max_perc_misconfig_sessions = 0.1
 
         num_misconfig = int(max_perc_misconfig_sessions * num_users)
         print(num_misconfig)
@@ -1005,14 +1008,10 @@ class MainMenu(cmd.Cmd):
 
         nx_attack_graph = create_networkx_graph()
         for misconfig_session_count in range(1, num_misconfig):
-            # todo Change after getting Custom params
-            # create_misconfig_sessisons(nTiers, self.level,self.parameters, num_users)
-            # print(f"Injecting misconfiguration {len(MISCONFIGURED_SESSION_USERS)}")
 
             nx_attack_graph = create_misconfig_sessions_from_entrypoints_multi_tiers(nTiers, nx_attack_graph,
                                                                                      self.level, self.parameters)
 
-            # find_shortest_paths_from_misconfig_users(nx_attack_graph, misconfig_session_count, domain_grp,user_level_metrics)
             find_user_count_with_path_to_DA(nx_attack_graph, domain_grp, misconfig_session_count,
                                             misconfig_growth_metrics)
 
@@ -1058,7 +1057,7 @@ class MainMenu(cmd.Cmd):
         update_db_with_temp_file(session, "session_mc")
 
         print("Misconfigured Sessions")
-        print(MISCONFIGURED_SESSION)
+        print(EXP_MISCONFIGURED_SESSION)
 
     def do_inject_permission_misconfigs(self, args):
 
@@ -1081,8 +1080,8 @@ class MainMenu(cmd.Cmd):
 
                 nx_attack_graph = create_misconfig_permissions_on_individuals_from_entrypoints(
                     nTiers,
-                    ADMIN_USERS,
-                    ENABLED_USERS,
+                    EXP_ADMIN_USERS,
+                    EXP_ENABLED_USERS,
                     self.level,
                     self.parameters,
                     num_users,
@@ -1132,6 +1131,6 @@ class MainMenu(cmd.Cmd):
             pass
 
         print("Final Misconfigured Sessions (permissions):")
-        print(MISCONFIGURED_SESSION)
+        print(EXP_MISCONFIGURED_SESSION)
 
         return nx_attack_graph

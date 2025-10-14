@@ -1,6 +1,9 @@
 from adsynth.DATABASE import ADMIN_USERS, ENABLED_USERS, LOCAL_ADMINS, PAW_TIERS, S_TIERS, SECURITY_GROUPS, WS_TIERS, \
-    edge_operation, get_node_index, MISCONFIGURED_SESSION, MISCONFIGURED_PERMISSION, MISCONFIGURED_PERMISSION_USERS, \
-    MISCONFIGURED_PERMISSION_COMPUTERS
+    edge_operation, get_node_index
+from adsynth.EXPERIMENT_DATABASE import EXP_ADMIN_USERS, EXP_ENABLED_USERS, EXP_PAW_TIERS, EXP_S_TIERS, EXP_WS_TIERS, \
+    EXP_MISCONFIGURED_SESSION_COMPUTERS, EXP_MISCONFIGURED_SESSION_USERS, exp_edge_operation, EXP_MISCONFIGURED_SESSION, \
+    EXP_MISCONFIGURED_PERMISSION_COMPUTERS, EXP_MISCONFIGURED_PERMISSION_USERS, EXP_MISCONFIGURED_PERMISSION, \
+    get_EXP_node_index
 from adsynth.adsynth_templates.admin_groups import get_admin_groups
 from adsynth.adsynth_templates.permissions import get_non_acls_list
 from adsynth.entities.acls import cn
@@ -11,7 +14,7 @@ from adsynth.utils.networkx_utils import get_id_from_name, create_networkx_graph
 from adsynth.utils.parameters import get_dict_param_value, get_int_param_value, get_perc_param_value
 import random
 
-from adsynth.DATABASE import MISCONFIGURED_SESSION_COMPUTERS, MISCONFIGURED_SESSION_USERS
+
 
 
 def create_misconfig_sessions_multi_tiers(nTiers, num_users, security_level, parameters):
@@ -295,10 +298,10 @@ def create_misconfig_sessions_from_entrypoints_multi_tiers(nTiers, nx_attack_gra
         # Sample a user at the specified tier
         lowest_tier_no_admin = min(2, nTiers - 1)
         if is_admin or ut < lowest_tier_no_admin:
-            user = random.choice(ADMIN_USERS[ut])
+            user = random.choice(EXP_ADMIN_USERS[ut])
         else:
             try:
-                user = random.choice(ENABLED_USERS[ut])
+                user = random.choice(EXP_ENABLED_USERS[ut])
             except:
                 print(f"Retry {retry_count}")
                 retry_count = retry_count + 1
@@ -307,19 +310,19 @@ def create_misconfig_sessions_from_entrypoints_multi_tiers(nTiers, nx_attack_gra
 
         # Sample a computer
         if ct == 0:  # PAW
-            comp = random.choice(PAW_TIERS[0])
+            comp = random.choice(EXP_PAW_TIERS[0])
         elif ct == 1 and nTiers > 2:  # Servers
-            comp = random.choice(PAW_TIERS[ct] + S_TIERS[ct])
+            comp = random.choice(EXP_PAW_TIERS[ct] + EXP_S_TIERS[ct])
         else:  # Workstations
-            comp = random.choice(PAW_TIERS[ct] + S_TIERS[ct] + WS_TIERS[ct])
+            comp = random.choice(EXP_PAW_TIERS[ct] + EXP_S_TIERS[ct] + EXP_WS_TIERS[ct])
 
-        if comp in MISCONFIGURED_SESSION_COMPUTERS and user in MISCONFIGURED_SESSION_USERS:
+        if comp in EXP_MISCONFIGURED_SESSION_COMPUTERS and user in EXP_MISCONFIGURED_SESSION_USERS:
             retry_count = retry_count + 1
             continue
         # Generate a session
-        start_index = get_node_index(comp + "_Computer", "name")
-        end_index = get_node_index(user + "_User", "name")
-        edge_operation(start_index, end_index, "HasSession")
+        start_index = get_EXP_node_index(comp + "_Computer", "name")
+        end_index = get_EXP_node_index(user + "_User", "name")
+        exp_edge_operation(start_index, end_index, "HasSession")
 
         nx_attack_graph = create_networkx_graph()
         # nx_start_id = get_id_from_name(nx_attack_graph, comp)
@@ -327,9 +330,9 @@ def create_misconfig_sessions_from_entrypoints_multi_tiers(nTiers, nx_attack_gra
 
         # nx_attack_graph.add_edge(nx_start_id, nx_end_id, method="HasSession")
 
-        MISCONFIGURED_SESSION_COMPUTERS.append(comp)
-        MISCONFIGURED_SESSION_USERS.append(user)
-        MISCONFIGURED_SESSION[comp] = user
+        EXP_MISCONFIGURED_SESSION_COMPUTERS.append(comp)
+        EXP_MISCONFIGURED_SESSION_USERS.append(user)
+        EXP_MISCONFIGURED_SESSION[comp] = user
         break
     return nx_attack_graph
     # todo - Use HasSession to do simulate similar admin user to log into lower tier computer
@@ -337,7 +340,7 @@ def create_misconfig_sessions_from_entrypoints_multi_tiers(nTiers, nx_attack_gra
     # print(MISCONFIGURED_SESSION)
 
 
-def create_misconfig_permissions_on_individuals_from_entrypoints(nTiers, A, EU, security_level, parameters, num_users,nx_attack_graph ):
+def create_misconfig_permissions_on_individuals_from_entrypoints(nTiers, EXP_ADMIN_USERS, EXP_ENABLED_USERS, security_level, parameters, num_users,nx_attack_graph ):
     if nTiers == 1:
         return
     CP = ["AdminTo", "CanRDP", "CanPSRemote", "ExecuteDCOM", "AllowedToDelegate", "ReadLAPSPassword", "SQLAdmin",
@@ -355,7 +358,7 @@ def create_misconfig_permissions_on_individuals_from_entrypoints(nTiers, A, EU, 
 
     # Sample a user at the specified tier
 
-    user = random.choice(EU[ut])
+    user = random.choice(EXP_ENABLED_USERS[ut])
 
     # Determine computer's tier
     if nTiers < 2:
@@ -375,24 +378,24 @@ def create_misconfig_permissions_on_individuals_from_entrypoints(nTiers, A, EU, 
 
         # Sample a computer
         if ct == 0:  # PAW
-            comp = random.choice(PAW_TIERS[0])
+            comp = random.choice(EXP_PAW_TIERS[0])
         elif ct == 1 and nTiers > 2:  # Servers
-            comp = random.choice(PAW_TIERS[ct] + S_TIERS[ct])
+            comp = random.choice(EXP_PAW_TIERS[ct] + EXP_S_TIERS[ct])
         else:  # Workstations
-            comp = random.choice(PAW_TIERS[ct] + S_TIERS[ct] + WS_TIERS[ct])
+            comp = random.choice(EXP_PAW_TIERS[ct] + EXP_S_TIERS[ct] + EXP_WS_TIERS[ct])
 
-        start_index = get_node_index(user + "_User", "name")
-        end_index = get_node_index(comp + "_Computer", "name")
+        start_index = get_EXP_node_index(user + "_User", "name")
+        end_index = get_EXP_node_index(comp + "_Computer", "name")
         rel_type = random.choice(CP)
-        edge_operation(start_index, end_index, rel_type)
+        exp_edge_operation(start_index, end_index, rel_type)
         nx_attack_graph = create_networkx_graph()
-        MISCONFIGURED_PERMISSION_COMPUTERS.append(comp)
-        MISCONFIGURED_PERMISSION_USERS.append(user)
+        EXP_MISCONFIGURED_PERMISSION_COMPUTERS.append(comp)
+        EXP_MISCONFIGURED_PERMISSION_USERS.append(user)
 
-        MISCONFIGURED_PERMISSION[comp] = user + " "+rel_type
+        EXP_MISCONFIGURED_PERMISSION[comp] = user + " "+rel_type
 
         print("Misconfigured Permissions")
-        print(MISCONFIGURED_PERMISSION)
+        print(EXP_MISCONFIGURED_PERMISSION)
         return  nx_attack_graph
 
 
@@ -470,23 +473,23 @@ def create_misconfig_permissions_on_individuals_from_entrypoints_with_custom_gra
         # Sample a computer from tier lists (fall back patterns preserved)
         try:
             if ct == 0:  # PAW
-                comp = random.choice(PAW_TIERS[0])
+                comp = random.choice(EXP_PAW_TIERS[0])
             elif ct == 1 and nTiers > 2:  # Servers
-                comp = random.choice(PAW_TIERS[ct] + S_TIERS[ct])
+                comp = random.choice(EXP_PAW_TIERS[ct] + EXP_S_TIERS[ct])
             else:  # Workstations or other tiers
-                comp = random.choice(PAW_TIERS[ct] + S_TIERS[ct] + WS_TIERS[ct])
+                comp = random.choice(EXP_PAW_TIERS[ct] + EXP_S_TIERS[ct] + EXP_WS_TIERS[ct])
         except Exception:
             # if sampling failed, skip
             continue
 
         # create relationship
         rel_type = random.choice(CP)
-        start_index = get_node_index(user + "_User", "name")
-        end_index = get_node_index(comp + "_Computer", "name")
+        start_index = get_EXP_node_index(user + "_User", "name")
+        end_index = get_EXP_node_index(comp + "_Computer", "name")
 
         # existing helper that likely updates DB/neo4j
         try:
-            edge_operation(start_index, end_index, rel_type)
+            exp_edge_operation(start_index, end_index, rel_type)
         except Exception:
             # don't fail entirely if edge operation throws; continue but at least try to add to nx graph
             pass
@@ -508,12 +511,12 @@ def create_misconfig_permissions_on_individuals_from_entrypoints_with_custom_gra
                     pass
 
         # track for reporting / de-duplication (keeps old behavior)
-        MISCONFIGURED_SESSION_COMPUTERS.append(comp)
-        MISCONFIGURED_SESSION_USERS.append(user)
-        MISCONFIGURED_SESSION[comp] = user
+        EXP_MISCONFIGURED_SESSION_COMPUTERS.append(comp)
+        EXP_MISCONFIGURED_SESSION_USERS.append(user)
+        EXP_MISCONFIGURED_SESSION[comp] = user
 
     # print summary (keeps original behavior)
     print("Misconfigured Sessions (permissions):")
-    print(MISCONFIGURED_SESSION)
+    print(EXP_MISCONFIGURED_SESSION)
 
     return nx_attack_graph

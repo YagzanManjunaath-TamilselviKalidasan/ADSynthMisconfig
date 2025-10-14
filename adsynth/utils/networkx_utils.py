@@ -3,9 +3,10 @@ import os
 from datetime import datetime
 import tempfile
 import networkx as nx
-from adsynth.DATABASE import NODES, EDGES, MISCONFIGURED_SESSION, MISCONFIGURED_SESSION_USERS, ENABLED_USERS, \
-    ADMIN_USERS, COMPUTERS, WS_TIERS
+
 import matplotlib.pyplot as plt
+
+from adsynth.EXPERIMENT_DATABASE import EXP_NODES, EXP_EDGES, EXP_COMPUTERS, EXP_MISCONFIGURED_SESSION_USERS
 
 
 def draw_graph(nx_attack_graph):
@@ -17,13 +18,13 @@ def draw_graph(nx_attack_graph):
 def create_networkx_graph():
     nx_attack_graph = nx.DiGraph()
 
-    for n in NODES:
+    for n in EXP_NODES:
         node_id = n["id"]
         props = n.get("properties", {})
         labels = n.get("labels", [])
         nx_attack_graph.add_node(node_id, labels=labels, **props)
 
-    for e in EDGES:
+    for e in EXP_EDGES:
         src = e["start"]["id"]
         src_labels = e["start"].get("labels", [])
         target = e["end"]["id"]
@@ -56,7 +57,6 @@ def get_id_from_name(graph, name):
 
 
 def find_user_count_with_path_to_DA(networkx_graph, domain_grp_name, misconfig_session_count, misconfig_growth_metrics):
-    G_undirected = networkx_graph.to_undirected(as_view=True)
     domain_grp_id = get_id_from_name(networkx_graph, domain_grp_name)
     if domain_grp_id not in networkx_graph:
         return
@@ -65,7 +65,7 @@ def find_user_count_with_path_to_DA(networkx_graph, domain_grp_name, misconfig_s
     reachable_nodes = set(lengths.keys())
 
 
-    comp_id_map = {c: get_id_from_name(networkx_graph, c) for c in COMPUTERS}
+    comp_id_map = {c: get_id_from_name(networkx_graph, c) for c in EXP_COMPUTERS}
     reachable_comps = {cid for cid in comp_id_map.values() if cid in reachable_nodes}
 
     reachable_users = set()
@@ -110,7 +110,7 @@ def find_user_count_with_path_to_DA_undirected(networkx_graph, domain_grp_name, 
     reachable_nodes = set(lengths.keys())
 
 
-    comp_id_map = {c: get_id_from_name(networkx_graph, c) for c in COMPUTERS}
+    comp_id_map = {c: get_id_from_name(networkx_graph, c) for c in EXP_COMPUTERS}
     reachable_comps = {cid for cid in comp_id_map.values() if cid in reachable_nodes}
 
     exploitable_permissions = ["AdminTo", "CanRDP", "CanPSRemote", "ExecuteDCOM", "AllowedToDelegate",
@@ -136,7 +136,7 @@ def find_user_count_with_path_to_DA_undirected(networkx_graph, domain_grp_name, 
 
 def find_shortest_paths_from_misconfig_users(networkx_graph, misconfig_user_count, domain_grp_name, user_level_metrics):
     domain_grp_id = get_id_from_name(networkx_graph, domain_grp_name)
-    for user in MISCONFIGURED_SESSION_USERS:
+    for user in EXP_MISCONFIGURED_SESSION_USERS:
         # print((f"Finding shortest path {user} and {domain_grp_name}"))
         user_id = get_id_from_name(networkx_graph, user)
 
@@ -170,7 +170,7 @@ def find_shortest_paths_from_misconfig_users(networkx_graph, misconfig_user_coun
 def calculate_total_paths_to_domain_admins(networkx_graph, misconfig_user_count, domain_grp_name, rows):
     # print("Users to check:", domain_grp_name not in networkx_graph)
 
-    for user in MISCONFIGURED_SESSION_USERS:
+    for user in EXP_MISCONFIGURED_SESSION_USERS:
         user_id = get_id_from_name(networkx_graph, user)
         domain_grp_id = get_id_from_name(networkx_graph, domain_grp_name)
         print((f" total path {user} and {domain_grp_name}"))
