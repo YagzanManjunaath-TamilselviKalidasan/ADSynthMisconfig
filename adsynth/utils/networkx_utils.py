@@ -64,9 +64,13 @@ def find_user_count_with_path_to_DA(networkx_graph, domain_grp_name, misconfig_s
     lengths = nx.single_target_shortest_path_length(networkx_graph, domain_grp_id)
     reachable_nodes = set(lengths.keys())
 
-
     comp_id_map = {c: get_id_from_name(networkx_graph, c) for c in EXP_COMPUTERS}
     reachable_comps = {cid for cid in comp_id_map.values() if cid in reachable_nodes}
+    reachable_comps_names = [
+        networkx_graph.nodes[cid].get("name", cid)
+        for cid in comp_id_map.values()
+        if cid in reachable_nodes
+    ]
 
     reachable_users = set()
 
@@ -75,17 +79,185 @@ def find_user_count_with_path_to_DA(networkx_graph, domain_grp_name, misconfig_s
                                "AllowedToAct"]
 
     for comp_id in reachable_comps:
+        # ---------- predecessors: users who have exploitable permissions TO the computer ----------
         for u in networkx_graph.predecessors(comp_id):
-            if ("User" in networkx_graph.nodes[u].get("labels", [])
-                    and networkx_graph.edges[u, comp_id].get("label") in exploitable_permissions):
-                reachable_users.add(u)
-        for v in networkx_graph.successors(comp_id):
-            if (
-                "User" in networkx_graph.nodes[v].get("labels", [])
-                and networkx_graph.edges[comp_id, v].get("label") == "HasSession"
-            ):
-                reachable_users.add(v)
+            if "User" not in networkx_graph.nodes[u].get("labels", []):
+                continue
 
+
+            exploit_types = []
+            edge_data = networkx_graph.get_edge_data(u, comp_id) or {}
+
+            if isinstance(edge_data, dict) and any(isinstance(k, (int, str)) for k in edge_data):
+
+                if any(isinstance(v, dict) and "label" in v for v in edge_data.values()):
+                    for v in edge_data.values():
+                        label = v.get("label")
+                        if label and label in exploitable_permissions:
+                            exploit_types.append(label)
+                else:
+
+                    label = edge_data.get("label")
+                    if label and label in exploitable_permissions:
+                        exploit_types.append(label)
+            else:
+                # simple DiGraph edge
+                label = networkx_graph.edges[u, comp_id].get("label")
+                if label and label in exploitable_permissions:
+                    exploit_types.append(label)
+
+            if exploit_types:
+                node_data = networkx_graph.nodes[u]
+                user_name = node_data.get("displayname") or node_data.get("name") or u
+                member_of = []
+                for g in networkx_graph.successors(u):
+                    if (
+                            networkx_graph.edges[u, g].get("label") == "MemberOf"
+                            and "Group" in networkx_graph.nodes[g].get("labels", [])
+                    ):
+                        member_of.append(networkx_graph.nodes[g].get("name", g))
+
+                exploit_label = ", ".join(sorted(set(exploit_types)))
+                meta_str = f"{user_name} - {member_of} - predecessor({exploit_label})"
+                reachable_users.add(meta_str)
+
+        # ---------- successors: users who have sessions ON the computer ----------
+        for v in networkx_graph.successors(comp_id):
+            if "User" not in networkx_graph.nodes[v].get("labels", []):
+                continue
+
+            session_labels = []
+            edge_data = networkx_graph.get_edge_data(comp_id, v) or {}
+            if isinstance(edge_data, dict) and any(isinstance(k, (int, str)) for k in edge_data):
+                if any(isinstance(val, dict) and "label" in val for val in edge_data.values()):
+                    for val in edge_data.values():
+                        label = val.get("label")
+                        if label == "HasSession":
+                            session_labels.append(label)
+                else:
+                    label = edge_data.get("label")
+                    if label == "HasSession":
+                        session_labels.append(label)
+            else:
+                if networkx_graph.edges[comp_id, v].get("label") == "HasSession":
+                    session_labels.append("HasSession")
+
+            if session_labels:
+                node_data = networkx_graph.nodes[v]
+                user_name = node_data.get("displayname") or node_data.get("name") or v
+                member_of = []
+                for g in networkx_graph.successors(v):
+                    if (
+                            networkx_graph.edges[v, g].get("label") == "MemberOf"
+                            and "Group" in networkx_graph.nodes[g].get("labels", [])
+                    ):
+                        member_of.append(networkx_graph.nodes[g].get("name", g))
+
+                exploit_label = ", ".join(sorted(set(session_labels)))
+                meta_str = f"{user_name} - {member_of} - successor({exploit_label})"
+                reachable_users.add(meta_str)
+
+    if misconfig_session_count not in misconfig_growth_metrics:
+        misconfig_growth_metrics[misconfig_session_count] = {}
+
+    prev_reachable_comps_names = set(
+            misconfig_growth_metrics[misconfig_session_count - 1]["reachable_comps_names"]
+        ) if misconfig_session_count -1 > 0 else set()
+
+    new_reachable_comps_names = set(reachable_comps_names) - prev_reachable_comps_names
+
+    prev_reachable_users = set(
+        misconfig_growth_metrics[misconfig_session_count - 1]["reachable_users"]
+    ) if misconfig_session_count - 1 > 0 else set()
+
+    new_reachable_users = set(reachable_users) - prev_reachable_users
+
+    misconfig_growth_metrics[misconfig_session_count]["reachable_users"] = list(reachable_users)
+    misconfig_growth_metrics[misconfig_session_count]["new_reachable_users"] = list(new_reachable_users)
+    misconfig_growth_metrics[misconfig_session_count]["reachable_comps"] = list(reachable_comps)
+    misconfig_growth_metrics[misconfig_session_count]["new_reachable_comps_names"] = list(new_reachable_comps_names)
+    misconfig_growth_metrics[misconfig_session_count]["reachable_comps_names"] = list(reachable_comps_names)
+    misconfig_growth_metrics[misconfig_session_count]["reachable_users_count"] = len(reachable_users)
+    misconfig_growth_metrics[misconfig_session_count]["reachable_comps_count"] = len(reachable_comps)
+
+
+def find_user_count_with_path_to_DA_(networkx_graph, domain_grp_name, misconfig_session_count, misconfig_growth_metrics):
+    domain_grp_id = get_id_from_name(networkx_graph, domain_grp_name)
+    if domain_grp_id not in networkx_graph:
+        return
+
+    lengths = nx.single_source_shortest_path_length(networkx_graph, domain_grp_id)
+    reachable_nodes = set(lengths.keys())
+
+    comp_id_map = {c: get_id_from_name(networkx_graph, c) for c in EXP_COMPUTERS}
+    reachable_comps = {cid for cid in comp_id_map.values() if cid in reachable_nodes}
+    reachable_comps_names = [
+        networkx_graph.nodes[cid].get("name", cid)
+        for cid in comp_id_map.values()
+        if cid in reachable_nodes
+    ]
+
+    reachable_users = set()
+
+    exploitable_permissions = [
+        "AdminTo", "CanRDP", "CanPSRemote", "ExecuteDCOM",
+        "AllowedToDelegate", "ReadLAPSPassword", "SQLAdmin", "AllowedToAct"
+    ]
+
+    for comp_id in reachable_comps:
+        for u in networkx_graph.predecessors(comp_id):
+            if "User" not in networkx_graph.nodes[u].get("labels", []):
+                continue
+
+            exploit_types = []
+            edge_data = networkx_graph.get_edge_data(u, comp_id) or {}
+            if isinstance(edge_data, dict):
+                for v in (edge_data.values() if all(isinstance(v, dict) for v in edge_data.values()) else [edge_data]):
+                    label = v.get("label")
+                    if label and label in exploitable_permissions:
+                        exploit_types.append(label)
+
+            if exploit_types:
+                node_data = networkx_graph.nodes[u]
+                user_name = node_data.get("displayname") or node_data.get("name") or u
+                member_of = [
+                    networkx_graph.nodes[g].get("name", g)
+                    for g in networkx_graph.successors(u)
+                    if (
+                        networkx_graph.edges[u, g].get("label") == "MemberOf"
+                        and "Group" in networkx_graph.nodes[g].get("labels", [])
+                    )
+                ]
+                exploit_label = ", ".join(sorted(set(exploit_types)))
+                meta_str = f"{user_name} - {member_of} - predecessor({exploit_label})"
+                reachable_users.add(meta_str)
+
+        for v in networkx_graph.successors(comp_id):
+            if "User" not in networkx_graph.nodes[v].get("labels", []):
+                continue
+
+            session_labels = []
+            edge_data = networkx_graph.get_edge_data(comp_id, v) or {}
+            if isinstance(edge_data, dict):
+                for val in (edge_data.values() if all(isinstance(val, dict) for val in edge_data.values()) else [edge_data]):
+                    label = val.get("label")
+                    if label == "HasSession":
+                        session_labels.append(label)
+
+            if session_labels:
+                node_data = networkx_graph.nodes[v]
+                user_name = node_data.get("displayname") or node_data.get("name") or v
+                member_of = [
+                    networkx_graph.nodes[g].get("name", g)
+                    for g in networkx_graph.successors(v)
+                    if (
+                        networkx_graph.edges[v, g].get("label") == "MemberOf"
+                        and "Group" in networkx_graph.nodes[g].get("labels", [])
+                    )
+                ]
+                exploit_label = ", ".join(sorted(set(session_labels)))
+                meta_str = f"{user_name} - {member_of} - successor({exploit_label})"
+                reachable_users.add(meta_str)
 
 
     if misconfig_session_count not in misconfig_growth_metrics:
@@ -93,13 +265,12 @@ def find_user_count_with_path_to_DA(networkx_graph, domain_grp_name, misconfig_s
 
     misconfig_growth_metrics[misconfig_session_count]["reachable_users"] = list(reachable_users)
     misconfig_growth_metrics[misconfig_session_count]["reachable_comps"] = list(reachable_comps)
+    misconfig_growth_metrics[misconfig_session_count]["reachable_comps_names"] = list(reachable_comps_names)
     misconfig_growth_metrics[misconfig_session_count]["reachable_users_count"] = len(reachable_users)
     misconfig_growth_metrics[misconfig_session_count]["reachable_comps_count"] = len(reachable_comps)
 
-
-
-
-def find_user_count_with_path_to_DA_undirected(networkx_graph, domain_grp_name, misconfig_session_count, misconfig_growth_metrics):
+def find_user_count_with_path_to_DA_undirected(networkx_graph, domain_grp_name, misconfig_session_count,
+                                               misconfig_growth_metrics):
     g_undirected = networkx_graph.to_undirected(as_view=True)
 
     domain_grp_id = get_id_from_name(networkx_graph, domain_grp_name)
@@ -108,7 +279,6 @@ def find_user_count_with_path_to_DA_undirected(networkx_graph, domain_grp_name, 
 
     lengths = nx.single_target_shortest_path_length(g_undirected, domain_grp_id)
     reachable_nodes = set(lengths.keys())
-
 
     comp_id_map = {c: get_id_from_name(networkx_graph, c) for c in EXP_COMPUTERS}
     reachable_comps = {cid for cid in comp_id_map.values() if cid in reachable_nodes}
@@ -121,8 +291,8 @@ def find_user_count_with_path_to_DA_undirected(networkx_graph, domain_grp_name, 
     for comp_id in reachable_comps:
         for v in networkx_graph.successors(comp_id):
             if (
-                "User" in networkx_graph.nodes[v].get("labels", [])
-                and networkx_graph.edges[comp_id, v].get("label") in exploitable_permissions
+                    "User" in networkx_graph.nodes[v].get("labels", [])
+                    and networkx_graph.edges[comp_id, v].get("label") in exploitable_permissions
             ):
                 reachable_users.add(v)
 
@@ -131,7 +301,6 @@ def find_user_count_with_path_to_DA_undirected(networkx_graph, domain_grp_name, 
     misconfig_growth_metrics[misconfig_session_count]["reachable_comps"] = list(reachable_comps)
     misconfig_growth_metrics[misconfig_session_count]["reachable_users_count"] = len(reachable_users)
     misconfig_growth_metrics[misconfig_session_count]["reachable_comps_count"] = len(reachable_comps)
-
 
 
 def find_shortest_paths_from_misconfig_users(networkx_graph, misconfig_user_count, domain_grp_name, user_level_metrics):

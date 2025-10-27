@@ -10,6 +10,7 @@ from adsynth.entities.acls import cn
 from adsynth.helpers.getters import get_locations, get_misconfig_dict_param_value
 from adsynth.templates.acls import get_acls_list
 from adsynth.templates.groups import get_departments_list
+from adsynth.utils.database_utils import clear_exp_neo4j_db, update_graph_db_with_temp_file
 from adsynth.utils.networkx_utils import get_id_from_name, create_networkx_graph
 from adsynth.utils.parameters import get_dict_param_value, get_int_param_value, get_perc_param_value
 import random
@@ -285,7 +286,117 @@ def create_misconfig_group_nesting(domain, nTiers, security_level, parameters, n
 #
 #
 ##
-def create_misconfig_sessions_from_entrypoints_multi_tiers(nTiers, nx_attack_graph, security_level, parameters):
+def create_misconfig_sessions_from_entrypoints_multi_tiers_(nTiers, nx_attack_graph,session,misconfig_count, security_level, parameters):
+    if nTiers < 2:
+        pass
+
+    is_admin = random.choice([True, False])
+    retry_count = 0
+    while retry_count < 3:
+        # Specify the user' tier
+        ut = random.randrange(0, nTiers - 1)
+
+        # Sample a user at the specified tier
+        lowest_tier_no_admin = min(2, nTiers - 1)
+        if is_admin or ut < lowest_tier_no_admin:
+            user = random.choice(EXP_ADMIN_USERS[ut])
+        else:
+            try:
+                user = random.choice(EXP_ENABLED_USERS[ut])
+            except:
+                print(f"Retry {retry_count}")
+                retry_count = retry_count + 1
+
+        try:
+            # Candidate node names (try common conventions)
+            user_node_name_exact = f"{user}_User"
+            possible_user_nodes = [
+                n for n, d in nx_attack_graph.nodes(data=True)
+                if n == user_node_name_exact
+                   or (isinstance(d, dict) and d.get("name") == user_node_name_exact)
+                   or n == user  # fallback if node stored without suffix
+                   or (isinstance(d, dict) and d.get("name") == user)
+            ]
+
+            if not possible_user_nodes:
+                # If we cannot find the user node reliably, treat it as a non-match and retry
+                # (alternatively you could `continue` or throw)
+                retry_count += 1
+                # print(f"User node for {user} not found in nx graph, retrying")
+                continue
+
+            # Find possible Domain Admin node identities in the NX graph
+            da_name_exact = "DOMAIN ADMINS@TESTLAB.LOCALE"
+            possible_da_nodes = [
+                n for n, d in nx_attack_graph.nodes(data=True)
+                if n == da_name_exact
+                   or (isinstance(d, dict) and d.get("name") == da_name_exact)
+                   or (isinstance(n, str) and "DOMAIN ADMINS" in n)
+                   or (isinstance(d, dict) and "DOMAIN ADMINS" in str(d.get("name", "")))
+            ]
+
+            # If no explicit DA node found, it's safer to skip this skip-check (or you can treat as retry).
+            if not possible_da_nodes:
+                # no domain admin node found in NX graph; proceed without skipping
+                pass
+            else:
+                # If any user node is directly adjacent to any DA node, skip this user
+                directly_connected = False
+                for u_node in possible_user_nodes:
+                    for da_node in possible_da_nodes:
+                        # check adjacency in either direction (undirected membership)
+                        if nx_attack_graph.has_edge(u_node, da_node) or nx_attack_graph.has_edge(da_node, u_node):
+                            directly_connected = True
+                            break
+                    if directly_connected:
+                        break
+
+                if directly_connected:
+                    retry_count += 1
+                    # print(f"Skipping user {user} because they are directly connected to DOMAIN ADMINS in nx graph")
+                    continue
+        except Exception as e:
+            # If something unexpected happens with the nx check, fallback to retrying (mirror previous behavior)
+            # print("Warning: NX membership check failed:", e)
+            retry_count += 1
+            continue
+        # Determine computer's tier
+        ct = random.randrange(ut + 1, nTiers)
+
+        # Sample a computer
+        if ct == 0:  # PAW
+            comp = random.choice(EXP_PAW_TIERS[0])
+        elif ct == 1 and nTiers > 2:  # Servers
+            comp = random.choice(EXP_PAW_TIERS[ct] + EXP_S_TIERS[ct])
+        else:  # Workstations
+            comp = random.choice(EXP_PAW_TIERS[ct] + EXP_S_TIERS[ct] + EXP_WS_TIERS[ct])
+
+        if comp in EXP_MISCONFIGURED_SESSION_COMPUTERS and user in EXP_MISCONFIGURED_SESSION_USERS:
+            retry_count = retry_count + 1
+            continue
+        # Generate a session
+        start_index = get_EXP_node_index(comp + "_Computer", "name")
+        end_index = get_EXP_node_index(user + "_User", "name")
+        exp_edge_operation(start_index, end_index, "HasSession")
+
+        nx_attack_graph = create_networkx_graph()
+
+        EXP_MISCONFIGURED_SESSION_COMPUTERS.append(comp)
+        EXP_MISCONFIGURED_SESSION_USERS.append(user)
+        EXP_MISCONFIGURED_SESSION[misconfig_count] = f"{comp}->{user}"
+        break
+
+    # Graph analysis
+
+    # clear_exp_neo4j_db(session)
+    # update_graph_db_with_temp_file(session, f"misconfig-session-temp")
+
+    return nx_attack_graph
+
+
+
+
+def create_misconfig_sessions_from_entrypoints_multi_tiers(nTiers, nx_attack_graph,session,misconfig_count, security_level, parameters):
     if nTiers < 2:
         pass
 
@@ -325,19 +436,20 @@ def create_misconfig_sessions_from_entrypoints_multi_tiers(nTiers, nx_attack_gra
         exp_edge_operation(start_index, end_index, "HasSession")
 
         nx_attack_graph = create_networkx_graph()
-        # nx_start_id = get_id_from_name(nx_attack_graph, comp)
-        # nx_end_id = get_id_from_name(nx_attack_graph, user)
-
-        # nx_attack_graph.add_edge(nx_start_id, nx_end_id, method="HasSession")
 
         EXP_MISCONFIGURED_SESSION_COMPUTERS.append(comp)
         EXP_MISCONFIGURED_SESSION_USERS.append(user)
-        EXP_MISCONFIGURED_SESSION[comp] = user
+        EXP_MISCONFIGURED_SESSION[misconfig_count] = f"{comp}->{user}"
         break
+
+    # Graph analysis
+
+    # clear_exp_neo4j_db(session)
+    # update_graph_db_with_temp_file(session, f"misconfig-session-temp")
+
     return nx_attack_graph
-    # todo - Use HasSession to do simulate similar admin user to log into lower tier computer
-    # print("Misconfigured Sessions")
-    # print(MISCONFIGURED_SESSION)
+
+
 
 
 def create_misconfig_permissions_on_individuals_from_entrypoints(nTiers, EXP_ADMIN_USERS, EXP_ENABLED_USERS, security_level, parameters, num_users,nx_attack_graph ):
