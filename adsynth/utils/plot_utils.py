@@ -42,9 +42,11 @@ def plot_chart_using_plotly(
         x_label,
         y_label,
         title,
+        file_name,
         additional_info: dict[str, str],
         plot_type: str = "line",
         hover_texts: list[str] | None = None,
+
 ):
     # pio.renderers.default = "browser"
     fig = go.Figure()
@@ -117,7 +119,12 @@ def plot_chart_using_plotly(
         margin=dict(l=60, r=40, t=80, b=60)
     )
 
-    fig.show()
+    save_path = f"/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/CodeSpace/ADSynth/generated_datasets/{file_name}.html"
+
+    if file_name:
+        fig.write_html(save_path)
+
+    # fig.show()
 
 
 def plot_bar_graph_per_itr_using_plotty(itr, misconfig_metrics_per_itr):

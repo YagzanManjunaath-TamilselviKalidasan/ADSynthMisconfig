@@ -7,6 +7,12 @@ from datetime import datetime
 from adsynth.DATABASE import *
 from adsynth.EXPERIMENT_DATABASE import *
 
+import json
+import os
+import gzip
+from pathlib import Path
+from typing import Any, Dict
+
 EXPERIMENT_STATES = {}
 
 
@@ -191,6 +197,128 @@ def restore_experiment_state(iteration_index: int = 0, verbose: bool = False):
     }
 
 
+
+
+def _json_safe(obj: Any) -> Any:
+    """Recursively convert non-JSON-native types to JSON-safe forms."""
+    if isinstance(obj, dict):
+        return {str(k): _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_json_safe(v) for v in obj]
+    if isinstance(obj, set):
+        return sorted([_json_safe(v) for v in obj])  # stable output
+    # Add more conversions here if needed (e.g., bytes -> base64)
+    return obj
+
+def _atomic_write_text(path: Path, text: str, compress: bool = False) -> None:
+    """Write text atomically; supports gzip when compress=True."""
+    path = Path(path)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    if compress:
+        with gzip.open(tmp, "wt", encoding="utf-8") as f:
+            f.write(text)
+    else:
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(text)
+    os.replace(tmp, path)
+
+def _read_text(path: Path) -> str:
+    path = Path(path)
+    if path.suffix.endswith(".gz"):
+        with gzip.open(path, "rt", encoding="utf-8") as f:
+            return f.read()
+    with open(path, "r", encoding="utf-8") as f:
+        return f.read()
+
+
+def save_all_experiment_states_to_json(filepath: str, pretty: bool = True, compress: bool = False):
+    """
+    Serialize the entire EXPERIMENT_STATES dict to JSON (optionally .gz).
+    Keys are converted to strings on write and restored to ints on load.
+    """
+    global EXPERIMENT_STATES
+    data = {
+        "meta": {
+            "version": 1,
+            "snapshots": len(EXPERIMENT_STATES),
+        },
+        "states": _json_safe(EXPERIMENT_STATES),  # make JSON-safe
+    }
+    kwargs = dict(indent=2, sort_keys=True) if pretty else dict(separators=(",", ":"), sort_keys=True)
+    text = json.dumps(data, **kwargs)
+    _atomic_write_text(Path(filepath), text, compress=compress)
+
+def load_all_experiment_states_from_json(filepath: str, verbose: bool = False):
+    """
+    Load JSON into EXPERIMENT_STATES. Restores top-level keys to int.
+    Does not mutate other globals; use restore_experiment_state() for that.
+    """
+    global EXPERIMENT_STATES
+    text = _read_text(Path(filepath))
+    loaded = json.loads(text)
+
+    if "states" not in loaded or not isinstance(loaded["states"], dict):
+        raise ValueError("Invalid snapshot file: missing 'states' dict")
+
+    # Convert top-level keys back to ints where possible
+    restored: Dict[int, Dict[str, Any]] = {}
+    for k, v in loaded["states"].items():
+        try:
+            ik = int(k)
+        except (ValueError, TypeError):
+            # Fallback: keep as string if not an int
+            ik = k
+        restored[ik] = v
+
+    EXPERIMENT_STATES = restored
+
+    if verbose:
+        print(f"Loaded {len(EXPERIMENT_STATES)} experiment snapshots from {filepath}")
+
+    return {"snapshots": len(EXPERIMENT_STATES)}
+
+def save_iteration_state_to_json(iteration_index: int, filepath: str, pretty: bool = True, compress: bool = False):
+    """
+    Save just one iteration snapshot (EXPERIMENT_STATES[iteration_index]) to JSON.
+    Useful for per-iteration artifacts and diffing.
+    """
+    global EXPERIMENT_STATES
+    if iteration_index not in EXPERIMENT_STATES:
+        raise KeyError(f"No saved experiment state found for iteration {iteration_index}")
+
+    data = {
+        "meta": {"version": 1, "iteration": iteration_index},
+        "state": _json_safe(EXPERIMENT_STATES[iteration_index]),
+    }
+    kwargs = dict(indent=2, sort_keys=True) if pretty else dict(separators=(",", ":"), sort_keys=True)
+    text = json.dumps(data, **kwargs)
+    _atomic_write_text(Path(filepath), text, compress=compress)
+
+def load_iteration_state_from_json(filepath: str, iteration_index: int = None, verbose: bool = False):
+    """
+    Load a single iteration snapshot JSON and store it into EXPERIMENT_STATES[iteration_index].
+    If iteration_index is None, tries to read from file meta.iteration.
+    """
+    global EXPERIMENT_STATES
+    text = _read_text(Path(filepath))
+    loaded = json.loads(text)
+
+    if "state" not in loaded:
+        raise ValueError("Invalid snapshot file: missing 'state' object")
+
+    if iteration_index is None:
+        iteration_index = loaded.get("meta", {}).get("iteration")
+        if iteration_index is None:
+            raise ValueError("iteration_index not provided and not found in file meta")
+
+    EXPERIMENT_STATES[iteration_index] = loaded["state"]
+
+    if verbose:
+        print(f"Loaded snapshot for iteration {iteration_index} from {filepath}")
+
+    return {"iteration": iteration_index}
+
+
 def clear_exp_neo4j_db(session):
     total = 1
     while total > 0:
@@ -283,3 +411,69 @@ def update_graph_db_with_temp_file(session, operation):
 
     # Clean up file afterwards
     os.remove(abs_path)
+
+
+import json
+import os
+
+
+def load_graph_from_file(session,filename: str):
+
+
+    file_path = f"/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/CodeSpace/ADSynth/generated_datasets/{filename}"
+
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(f"File not found: {file_path}")
+
+    nodes, edges = [], []
+
+    with open(file_path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError as e:
+                print(f"Skipping invalid JSON line: {e}")
+                continue
+
+            if obj.get("type") == "node":
+                # Remove "type" for clean in-memory representation
+                obj.pop("type", None)
+                nodes.append(obj)
+            else:
+                edges.append(obj)
+    with tempfile.NamedTemporaryFile(
+            mode="w", suffix=f"test.json",  dir=".", delete=False
+    ) as tmpfile:
+        temp_path = tmpfile.name
+
+
+        for obj in nodes:
+            obj["type"] = "node"
+            json_str = json.dumps(obj, separators=(',', ':'))
+            tmpfile.write(json_str + '\n')
+
+
+        for obj in edges:
+            json_str = json.dumps(obj, separators=(',', ':'))
+            tmpfile.write(json_str + '\n')
+
+    abs_path = os.path.abspath(temp_path)
+
+    query = (
+        f"PROFILE CALL apoc.periodic.iterate("
+        f"\"CALL apoc.import.json('{abs_path}')\", "
+        f"\"RETURN 1\", {{batchSize:1000}})"
+    )
+
+    session.run(query)
+    session.close()
+
+    # Clean up file afterwards
+    os.remove(abs_path)
+
+
+    print(f"Loaded {len(nodes)} nodes and {len(edges)} edges from {file_path}")
+    return {"nodes": len(nodes), "edges": len(edges), "path": file_path}
