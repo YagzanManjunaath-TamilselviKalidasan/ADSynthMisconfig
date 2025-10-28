@@ -1058,7 +1058,7 @@ class MainMenu(cmd.Cmd):
                 x_label="Number of session misconfigurations",
                 y_label="Number of users with Admins",
                 title="Number of users with path to domain admin",
-                file_name=f"session-{base_filename}-{itr}",
+                file_name=f"session-{itr}-{base_filename}",
                 additional_info=additional_info,
                 plot_type="line",
                 hover_texts=hover_texts
@@ -1177,7 +1177,7 @@ class MainMenu(cmd.Cmd):
                 x_label="Number of individual permission misconfigurations",
                 y_label="Number of users with Admins",
                 title="Number of users with path to domain admin",
-                file_name=f"permission-i-{base_filename}-{itr}",
+                file_name=f"permission-i-{itr}-{base_filename}",
                 additional_info=additional_info,
                 plot_type="line",
                 hover_texts=hover_texts
@@ -1293,7 +1293,6 @@ class MainMenu(cmd.Cmd):
             reachable_comps_count = [misconfig_growth_metrics[k]["reachable_comps_count"] for k in
                                      number_of_misconfigs]
 
-            base_filename = os.path.basename(self.parameters_json_path)
             additional_info = {"Total users": num_users, "Number of Group Permission Misconfigs": num_misconfig,
                                "Base file": base_filename, "Iteration": itr}
             hover_texts = [
@@ -1306,7 +1305,7 @@ class MainMenu(cmd.Cmd):
                 x_label="Number of group permission misconfigurations",
                 y_label="Number of users with Admins",
                 title="Number of users with path to domain admin",
-                file_name=f"permission-g-{base_filename}-{itr}",
+                file_name=f"permission-g-{itr}-{base_filename}",
                 additional_info=additional_info,
                 plot_type="line",
                 hover_texts=hover_texts
@@ -1410,7 +1409,7 @@ class MainMenu(cmd.Cmd):
                 x_label="Number of group nesting misconfigurations",
                 y_label="Number of users with Admins",
                 title="Number of users with path to domain admin",
-                file_name=f"session-{base_filename}-{itr}",
+                file_name=f"grp-nesting-{itr}-{base_filename}",
                 additional_info=additional_info,
                 plot_type="line",
                 hover_texts=hover_texts
