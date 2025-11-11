@@ -53,9 +53,13 @@ def init_experiment_state(iteration_index: int = 0, verbose: bool = False):
     EXP_MISCONFIGURED_SESSION_USERS[:] = []
     EXP_MISCONFIGURED_SESSION.clear()
 
+
     EXP_MISCONFIGURED_PERMISSION_COMPUTERS[:] = []
     EXP_MISCONFIGURED_PERMISSION_USERS[:] = []
     EXP_MISCONFIGURED_PERMISSION.clear()
+
+    EXP_MISCONFIGURED_GRP_PERMISSION.clear()
+    EXP_MISCONFIGURED_GRP_NESTING.clear()
 
     global EXP_neo4j_id
     EXP_neo4j_id = neo4j_id
@@ -121,6 +125,10 @@ def save_experiment_state(iteration_index: int, verbose: bool = False):
         "folders": copy.deepcopy(EXP_FOLDERS),
         "kerberoastables": copy.deepcopy(EXP_KERBEROASTABLES),
         "local_admins": copy.deepcopy(EXP_LOCAL_ADMINS),
+        "misconfig_session": copy.deepcopy(EXP_MISCONFIGURED_SESSION),
+        "misconfig_permission": copy.deepcopy(EXP_MISCONFIGURED_PERMISSION),
+        "misconfig_grp_permission": copy.deepcopy(EXP_MISCONFIGURED_GRP_PERMISSION),
+        "misconfig_grp_nesting": copy.deepcopy(EXP_MISCONFIGURED_GRP_NESTING),
         "misconfig_session_users": copy.deepcopy(EXP_MISCONFIGURED_SESSION_USERS),
         "misconfig_session_computers": copy.deepcopy(EXP_MISCONFIGURED_SESSION_COMPUTERS),
         "misconfig_permissions_users": copy.deepcopy(EXP_MISCONFIGURED_PERMISSION_USERS),
@@ -173,7 +181,14 @@ def restore_experiment_state(iteration_index: int = 0, verbose: bool = False):
     EXP_FOLDERS[:] = copy.deepcopy(snapshot["folders"])
     EXP_KERBEROASTABLES[:] = copy.deepcopy(snapshot["kerberoastables"])
     EXP_LOCAL_ADMINS[:] = copy.deepcopy(snapshot["local_admins"])
-
+    EXP_MISCONFIGURED_SESSION.clear()
+    EXP_MISCONFIGURED_SESSION.update(copy.deepcopy(snapshot["misconfig_session"]))
+    EXP_MISCONFIGURED_PERMISSION.clear()
+    EXP_MISCONFIGURED_PERMISSION.update(copy.deepcopy(snapshot["misconfig_permission"]))
+    EXP_MISCONFIGURED_GRP_PERMISSION.clear()
+    EXP_MISCONFIGURED_GRP_PERMISSION.update(copy.deepcopy(snapshot["misconfig_grp_permission"]))
+    EXP_MISCONFIGURED_GRP_NESTING.clear()
+    EXP_MISCONFIGURED_GRP_NESTING.update(copy.deepcopy(snapshot["misconfig_grp_nesting"]))
     EXP_MISCONFIGURED_SESSION_USERS[:] = copy.deepcopy(snapshot["misconfig_session_users"])
     EXP_MISCONFIGURED_SESSION_COMPUTERS[:] = copy.deepcopy(snapshot["misconfig_session_computers"])
     EXP_MISCONFIGURED_PERMISSION_USERS[:] = copy.deepcopy(snapshot["misconfig_permissions_users"])

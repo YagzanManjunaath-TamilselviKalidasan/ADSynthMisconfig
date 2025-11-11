@@ -11,7 +11,8 @@ import pandas as pd
 from adsynth.DATABASE import NODES, EDGES
 import matplotlib.pyplot as plt
 
-from adsynth.EXPERIMENT_DATABASE import EXP_MISCONFIGURED_SESSION, EXP_MISCONFIGURED_SESSION_USERS, EXP_NODES, EXP_EDGES
+from adsynth.EXPERIMENT_DATABASE import EXP_MISCONFIGURED_SESSION, EXP_MISCONFIGURED_SESSION_USERS, EXP_NODES, \
+    EXP_EDGES, EXP_MISCONFIGURED_PERMISSION
 
 
 def populate_admin_users(NODES):
@@ -176,15 +177,15 @@ def analyze_group_surges_from_csv(csv_path):
     return group_counts
 
 
-def tabulate_experiment_results(session,misconfig_growth_metrics):
+def tabulate_experiment_results(session, misconfig_growth_metrics, misconfig_type="test"):
     query_template = """
                      WITH $pair AS pair
                      WITH split(pair, '->') AS parts
                      WITH trim (parts[0]) AS compName, trim (parts[1]) AS userName
-                        MATCH (c:Computer {name: compName})
-                        OPTIONAL MATCH (ouC:OU)-[:Contains]->(c)
-                        OPTIONAL MATCH (c)-[:MemberOf]->(grpC:Group)
-                        OPTIONAL MATCH (c)-[:HasSession]->(uSession:User)
+                         MATCH (c :Computer {name : compName})
+                         OPTIONAL MATCH (ouC:OU)-[: Contains]->(c)
+                         OPTIONAL MATCH (c)-[:MemberOf]->(grpC: Group)
+                         OPTIONAL MATCH (c)-[:HasSession]->(uSession: User)
                      WITH
                          c, collect(DISTINCT ouC.name) AS compOUs, collect(DISTINCT grpC.name) AS compGroups, collect(DISTINCT uSession.name) AS allSessionUsers, userName
                          MATCH (u: User {name : userName})
@@ -218,7 +219,10 @@ def tabulate_experiment_results(session,misconfig_growth_metrics):
 
     results = []
 
-    for i, pair in EXP_MISCONFIGURED_SESSION.items():
+
+    for i in sorted(EXP_MISCONFIGURED_SESSION.keys(), key=lambda x: int(x)):
+        pair = EXP_MISCONFIGURED_SESSION[i]
+        i = int(i)
         result = session.run(query_template, {"pair": pair})
         record = result.single()
         if record:
@@ -236,6 +240,31 @@ def tabulate_experiment_results(session,misconfig_growth_metrics):
                 "ReachableComps": misconfig_growth_metrics[i]["new_reachable_comps_names"],
                 "ReachableUsers": misconfig_growth_metrics[i]["new_reachable_users"]
             })
+
+    if misconfig_type == "session":
+        pass
+    else:
+        for i in sorted(EXP_MISCONFIGURED_PERMISSION.keys(), key=lambda x: int(x)):
+            pair = EXP_MISCONFIGURED_PERMISSION[i]
+            i =int(i)
+            result = session.run(query_template, {"pair": pair})
+            record = result.single()
+            if record:
+                results.append({
+                    "Iteration":  (10 +  i),
+                    "comp → user": pair.replace("->", " → "),
+                    "Computer": record["Computer"],
+                    "User": record["User"],
+                    "ComputerOUs": record["ComputerOUs"],
+                    "ComputerGroups": record["ComputerGroups"],
+                    "OtherUsersWithSessionOnComputer": record["OtherUsersWithSessionOnComputer"],
+                    "UserOUs": record["UserOUs"],
+                    "UserGroups": record["UserGroups"],
+                    "ComputersWhereUserHasSession": record["ComputersWhereUserHasSession"],
+                    "ReachableComps": misconfig_growth_metrics[i]["new_reachable_comps_names"],
+                    "ReachableUsers": misconfig_growth_metrics[i]["new_reachable_users"]
+                })
+
     # --- Markdown table header (added Exploit column) ---
     print(
         "| Iteration | comp → user | Computer | User | Computer OUs | Computer Groups | Other Users w/ Session on Computer | User OUs | User Groups | Computers Where User Has Session | Reachable Comps | Reachable User count | Reachable User | Exploit | Groups |"
@@ -378,5 +407,3 @@ def tabulate_experiment_results(session,misconfig_growth_metrics):
                     f"|  |  |  |  |  |  |  |  |  |  |  |  | `{reachable_user}` | `{exploit_display}` | {group_lines} |"
                 )
     return results
-
-

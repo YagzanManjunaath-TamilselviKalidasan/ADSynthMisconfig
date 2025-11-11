@@ -162,6 +162,7 @@ def plot_box_plot_using_plotty(
         title,
         x_axis_title,
         y_axis_title,
+        file_name,
         additional_info: dict[str, str],
         user_map: dict[int, dict[int, list[str]]] | None = None,  # optional mapping
 ):
@@ -243,4 +244,8 @@ def plot_box_plot_using_plotty(
         height=700
     )
 
-    fig.show()
+    save_path = f"/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/CodeSpace/ADSynth/generated_datasets/{file_name}.html"
+
+    if file_name:
+        fig.write_html(save_path)
+    # fig.show()
