@@ -8,7 +8,7 @@ def main():
     try:
 
         main = MainMenu()
-        args = "/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/CodeSpace/ADSynth/adsynth/experiment_params/secure_1k.json  High"
+        args = "/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/adsynth/experiment_params/secure_1k.json  High"
         main.do_initialise_AD_graph_from_json(args)
         main.do_inject_session_misconfigs(args)
 

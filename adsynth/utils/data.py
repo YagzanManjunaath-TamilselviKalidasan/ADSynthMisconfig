@@ -51,7 +51,7 @@ def get_data_path():
     # return os.path.expanduser("~") + "/.adsynth/data/"
     print(os.getcwd())
     # return "os.getcwd() "+ "/data/"
-    return  "/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/CodeSpace/ADSynth/data/"
+    return  "/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/data/"
 
 def get_names_pool():
     with open(get_data_path() + 'first.pkl', 'rb') as f:

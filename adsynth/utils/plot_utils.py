@@ -119,7 +119,7 @@ def plot_chart_using_plotly(
         margin=dict(l=60, r=40, t=80, b=60)
     )
 
-    save_path = f"/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/CodeSpace/ADSynth/generated_datasets/{file_name}.html"
+    save_path = f"/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/generated_datasets/{file_name}.html"
 
     if file_name:
         fig.write_html(save_path)
@@ -244,7 +244,7 @@ def plot_box_plot_using_plotty(
         height=700
     )
 
-    save_path = f"/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/CodeSpace/ADSynth/generated_datasets/{file_name}.html"
+    save_path = f"/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/generated_datasets/{file_name}.html"
 
     if file_name:
         fig.write_html(save_path)

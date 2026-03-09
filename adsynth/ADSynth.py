@@ -60,6 +60,7 @@ from adsynth.synthesizer.security_policies import apply_gpos, apply_restriction_
 from adsynth.synthesizer.sessions import create_dc_sessions, create_sessions
 from adsynth.templates.acls import get_acls_list
 from adsynth.templates.groups import get_departments_list
+from adsynth.utils.ablation_study_utils import get_baseline_from_AD, indicators_hci_csm_tbs, exposure_X, exposure_parts
 from adsynth.utils.data import get_names_pool, get_surnames_pool, get_parameters_from_json, get_domains_pool
 from adsynth.utils.database_utils import init_experiment_state, restore_experiment_state, save_experiment_state, \
     clear_exp_neo4j_db, update_graph_db_with_temp_file, save_all_experiment_states_to_json, load_graph_from_file, \
@@ -860,7 +861,7 @@ class MainMenu(cmd.Cmd):
             print("Dump to JSON file")
 
             with open(
-                    f"/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/CodeSpace/ADSynth/generated_datasets/{filename}.json",
+                    f"/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/generated_datasets/{filename}.json",
                     "w") as f:
                 for obj in NODES:
                     obj["type"] = "node"
@@ -871,7 +872,7 @@ class MainMenu(cmd.Cmd):
 
             # Open the file in append mode
             with open(
-                    f"/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/CodeSpace/ADSynth/generated_datasets/{filename}.json",
+                    f"/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/generated_datasets/{filename}.json",
                     'a') as f:
                 print(f"generated_datasets/{filename}.json")
                 for obj in EDGES:
@@ -961,12 +962,12 @@ class MainMenu(cmd.Cmd):
 
     def do_test_all_configs(self, args):
         config_list = [
-            "/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/CodeSpace/ADSynth/adsynth/experiment_params/secure_1k.json  High",
-            "/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/CodeSpace/ADSynth/adsynth/experiment_params/secure_5k.json  High",
-            "/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/CodeSpace/ADSynth/adsynth/experiment_params/secure_10k.json  High",
-            "/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/CodeSpace/ADSynth/adsynth/experiment_params/vul_1k.json Low",
-            "/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/CodeSpace/ADSynth/adsynth/experiment_params/vul_5k.json Low",
-            "/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/CodeSpace/ADSynth/adsynth/experiment_params/vul_10k.json Low"]
+            "/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/adsynth/experiment_params/secure_1k.json  High",
+            "/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/adsynth/experiment_params/secure_5k.json  High",
+            "/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/adsynth/experiment_params/secure_10k.json  High",
+            "/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/adsynth/experiment_params/vul_1k.json Low",
+            "/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/adsynth/experiment_params/vul_5k.json Low",
+            "/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/adsynth/experiment_params/vul_10k.json Low"]
 
         for config in config_list:
             self.do_initialise_AD_graph_from_json(config)
@@ -989,7 +990,7 @@ class MainMenu(cmd.Cmd):
 
         self.test_db_conn()
 
-        json_path = "/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/CodeSpace/ADSynth/adsynth/experiment_params/secure_1k.json"
+        json_path = "/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/adsynth/experiment_params/secure_1k.json"
         self.parameters = get_parameters_from_json(json_path)
         if self.parameters == DEFAULT_CONFIGURATIONS:
             self.parameters_json_path = "DEFAULT"
@@ -1000,102 +1001,89 @@ class MainMenu(cmd.Cmd):
         self.level = "High"
         self.do_generate(args)
 
-    def do_inject_session_misconfigs(self, args):
-
+    def do_session_level_ablation_study(self, args):
         if len(NODES) == 0:
             print("====================================================================")
             print("== No graph intialised to generate misconfigurations ==")
             return
         nTiers = get_num_tiers(self.parameters)
-
         num_users = get_int_param_value("User", "nUsers", self.parameters)
+        num_computers = get_int_param_value("Computer", "nComputers", self.parameters)
+
+        N_baseline_session = get_baseline_from_AD("session")
+
         print("====================================================================")
         print("== Injecting Session Misconfigurations ==")
 
         # Assuming Max of 10% of misconfigurations for fine grained analysis
         max_perc_misconfig_sessions = 0.1
-
-        # perc_misconfig_sessions = get_perc_param_value("perc_misconfig_sessions", security_level, parameters) / 100
-
-        num_misconfig = 10
         num_misconfig = int(max_perc_misconfig_sessions * num_users)
-        print(num_misconfig)
-
         domain_grp = "DOMAIN ADMINS@TESTLAB.LOCALE"
         misconfig_metrics_per_itr = {}
         base_filename = os.path.splitext(os.path.basename(self.parameters_json_path))[0]
-
-        for itr in range(1, 6):
+        for itr in range(1, num_misconfig):
             init_experiment_state()
-            networkx_graph  = create_networkx_graph()
+            networkx_graph = create_networkx_graph()
 
             misconfig_growth_metrics = {}
             for misconfig_session_count in range(1, num_misconfig + 1):
                 print(f"Injecting {misconfig_session_count}")
-                networkx_graph = create_misconfig_sessions_from_entrypoints_multi_tiers(nTiers,networkx_graph,
-                                                                                         self.driver.session(),
-                                                                                         misconfig_session_count,
-                                                                                         self.level, self.parameters)
-                if misconfig_session_count % 600 == 0:
-                    networkx_graph  = create_networkx_graph()
-                    find_user_count_with_path_to_DA(networkx_graph, domain_grp, misconfig_session_count,
-                                                    misconfig_growth_metrics)
-
-
+                networkx_graph = create_misconfig_sessions_from_entrypoints_multi_tiers(nTiers, networkx_graph,
+                                                                                        self.driver.session(),
+                                                                                        misconfig_session_count,
+                                                                                        self.level, self.parameters)
+                # if misconfig_session_count % 600 == 0:
+                networkx_graph = create_networkx_graph()
+                find_user_count_with_path_to_DA(networkx_graph, domain_grp, misconfig_session_count,
+                                                misconfig_growth_metrics)
 
             number_of_misconfigs = sorted(misconfig_growth_metrics.keys())
-            reachable_users_count = [misconfig_growth_metrics[k]["reachable_users_count"] for k in number_of_misconfigs]
-            reachable_comps_count = [misconfig_growth_metrics[k]["reachable_comps_count"] for k in number_of_misconfigs]
+            reachable_users_count = len([misconfig_growth_metrics[k]["reachable_users_count"] for k in number_of_misconfigs])
+            reachable_comps_count = len([misconfig_growth_metrics[k]["reachable_comps_count"] for k in number_of_misconfigs])
+            indicators = indicators_hci_csm_tbs(EXP_EDGES, {2}, 1.0)
 
-            additional_info = {"Total users": num_users, "Number of Session Misconfigs": num_misconfig,
-                               "Percentage of Misconfig sessions": max_perc_misconfig_sessions,
-                               "Base file": base_filename, "Iteration": itr}
+            width = max(len(k) for k in indicators)
+            for k, v in indicators.items():
+                print(f"{k:<{width}} : {v}")
+            R = exposure_X(reachable_users_count, reachable_comps_count, num_users, num_computers)
+            Ru, Rc = exposure_parts(reachable_users_count, reachable_comps_count, num_users, num_computers)
 
-            hover_texts = [
-                "<br>".join(misconfig_growth_metrics[k].get("reachable_users", []))
-                for k in number_of_misconfigs
-            ]
-            plot_chart_using_plotly(
-                x_values=number_of_misconfigs,
-                y_values=reachable_users_count,
-                x_label="Number of new Has-Session edges",
-                y_label="Number of users with path to Domain admins",
-                title="Evolution of Reachable Users During Session Misconfiguration Percolation",
-                file_name=f"session-{itr}-{base_filename}",
-                additional_info=additional_info,
-                plot_type="line",
-                hover_texts=hover_texts
-            )
-
+            print("R(p):", R)
+            print("|R∩U|/|U|:", Ru)
+            print("|R∩C|/|C|:", Rc)
             # plot_plot_chart(number_of_misconfigs, reachable_comps_count, "Number of Misconfigured Sessions",
             #                 "Number of Reachable Computers", "Reachable Computers (computers in all tiers) vs Misconfiguration Sessions",
             #                 additional_info, "line")
             misconfig_metrics_per_itr[itr] = misconfig_growth_metrics
             save_experiment_state(itr)
-            self.saveTofile(f"session-{itr}-{base_filename}.json")
+            saveTofile(self,f"session-{itr}-{base_filename}.json")
             # clear_exp_neo4j_db(self.driver.session())
             # update_graph_db_with_temp_file(self.driver.session(), f"misconfig-session-temp={itr}")
             # tabulate_experiment_results(self.driver.session(),misconfig_growth_metrics)
 
-        additional_info = {"Total users": num_users, "Type": "Session misconfiguration",
-                           "Number of Session Misconfigs": num_misconfig,
-                           "Base file": base_filename}
-        plot_box_plot_using_plotty(misconfig_metrics_per_itr,
-                                   "Distribution of Number of  users with path to Domain admin per Misconfiguration Step (Iterations 1–N)",
-                                   "Number of misconfigurations",
-                                   "No of users with path to Domain admin",
-                                   "session_boxplot",
-                                   additional_info
-                                   )
+            additional_info = {"Total users": num_users, "Type": "Session misconfiguration",
+                               "Number of Session Misconfigs": num_misconfig,
+                               "Step i": itr,
+                               "Base file": base_filename}
 
+            width = max(len(k) for k in additional_info)
+            for k, v in additional_info.items():
+                print(f"{k:<{width}} : {v}")
+
+        # plot_box_plot_using_plotty(misconfig_metrics_per_itr,
+        #                            "Distribution of Number of  users with path to Domain admin per Misconfiguration Step (Iterations 1–N)",
+        #                            "Number of misconfigurations",
+        #                            "No of users with path to Domain admin",
+        #                            "session_boxplot",
+        #                            additional_info
+        #                            )
 
         save_all_experiment_states_to_json(
-            f"/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/CodeSpace/ADSynth/generated_datasets/experiment_session_{base_filename}.json",
+            f"/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/generated_datasets/experiment_session_{base_filename}.json",
         )
 
-
         with open(
-                f"/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/CodeSpace/ADSynth/generated_datasets/mgm_session_{base_filename}.json",
+                f"/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/generated_datasets/mgm_session_{base_filename}.json",
                 "w") as f:
             json.dump(misconfig_metrics_per_itr, f, indent=4)
 
@@ -1111,290 +1099,156 @@ class MainMenu(cmd.Cmd):
         if continue_to_next_misconfig == "true":
             self.do_inject_individual_permission_misconfigs(args)
 
-    def do_inject_individual_permission_misconfigs(self, args):
 
-        nTiers = get_num_tiers(self.parameters)
-        num_users = get_int_param_value("User", "nUsers", self.parameters)
+def do_inject_session_misconfigs(self, args):
+    if len(NODES) == 0:
         print("====================================================================")
-        print("== Injecting Permission Misconfigurations ==")
+        print("== No graph intialised to generate misconfigurations ==")
+        return
+    nTiers = get_num_tiers(self.parameters)
 
-        CP = ["AdminTo", "CanRDP", "CanPSRemote", "ExecuteDCOM", "AllowedToDelegate", "ReadLAPSPassword", "SQLAdmin",
-              "AllowedToAct"]
+    num_users = get_int_param_value("User", "nUsers", self.parameters)
+    print("====================================================================")
+    print("== Injecting Session Misconfigurations ==")
 
-        # number of iterations -- original code used range(1,10) ; keep that but allow config
-        num_iterations = int(self.parameters.get("perm_misconfig_iterations", 10)) if isinstance(self.parameters,
-                                                                                                 dict) else 10
-        misconfig_perc = get_perc_param_value("perc_misconfig_permissions", self.level, self.parameters) / 100
-        # num_misconfig = int(misconfig_perc * num_users)
-        # num_misconfig = 10
-        num_misconfig = int(misconfig_perc * num_users)
-        misconfig_to_tier_0_allow, misconfig_to_tier_0_limit = get_misconfig_dict_param_value(
-            "misconfig_permissions_to_tier_0", self.parameters)
+    # Assuming Max of 10% of misconfigurations for fine grained analysis
+    max_perc_misconfig_sessions = 0.1
 
-        domain_grp = "DOMAIN ADMINS@TESTLAB.LOCALE"
+    # perc_misconfig_sessions = get_perc_param_value("perc_misconfig_sessions", security_level, parameters) / 100
 
-        misconfig_metrics_per_itr = {}
-        base_filename = os.path.splitext(os.path.basename(self.parameters_json_path))[0]
+    num_misconfig = 10
+    num_misconfig = int(max_perc_misconfig_sessions * num_users)
+    print(num_misconfig)
 
-        for itr in range(1, 6):
-            restore_experiment_state(itr)
-            # init_experiment_state()
-            nx_attack_graph = create_networkx_graph()
+    domain_grp = "DOMAIN ADMINS@TESTLAB.LOCALE"
+    misconfig_metrics_per_itr = {}
+    base_filename = os.path.splitext(os.path.basename(self.parameters_json_path))[0]
 
-            misconfig_growth_metrics = {}
-            for misconfig_num in range(1, num_misconfig + 1):
-                nx_attack_graph = create_misconfig_permissions_on_individuals_from_entrypoints(
-                    nTiers,
-                    EXP_ADMIN_USERS,
-                    EXP_ENABLED_USERS,
-                    self.level,
-                    self.parameters,
-                    num_users,
-                    CP,
-                    misconfig_to_tier_0_allow,
-                    misconfig_to_tier_0_limit,
-                    misconfig_num,
-                    nx_attack_graph
-                )
-                if misconfig_num % 5000 == 0:
-                    nx_attack_graph = create_networkx_graph()
-                    find_user_count_with_path_to_DA(
-                            nx_attack_graph,
-                            domain_grp,
-                            misconfig_num,
-                            misconfig_growth_metrics
-                        )
+    for itr in range(1, num_misconfig):
+        init_experiment_state()
+        networkx_graph = create_networkx_graph()
 
-            number_of_misconfigs = sorted(misconfig_growth_metrics.keys())
-            reachable_users_count = [misconfig_growth_metrics[k]["reachable_users_count"] for k in
-                                     number_of_misconfigs]
-            reachable_comps_count = [misconfig_growth_metrics[k]["reachable_comps_count"] for k in
-                                     number_of_misconfigs]
+        misconfig_growth_metrics = {}
+        for misconfig_session_count in range(1, num_misconfig + 1):
+            print(f"Injecting {misconfig_session_count}")
+            networkx_graph = create_misconfig_sessions_from_entrypoints_multi_tiers(nTiers, networkx_graph,
+                                                                                    self.driver.session(),
+                                                                                    misconfig_session_count,
+                                                                                    self.level, self.parameters)
+            # if misconfig_session_count % 600 == 0:
+            networkx_graph = create_networkx_graph()
+            find_user_count_with_path_to_DA(networkx_graph, domain_grp, misconfig_session_count,
+                                            misconfig_growth_metrics)
 
+        number_of_misconfigs = sorted(misconfig_growth_metrics.keys())
+        reachable_users_count = [misconfig_growth_metrics[k]["reachable_users_count"] for k in number_of_misconfigs]
+        reachable_comps_count = [misconfig_growth_metrics[k]["reachable_comps_count"] for k in number_of_misconfigs]
+        indicators = indicators_hci_csm_tbs(EXP_EDGES, {2}, 1.0)
 
-            additional_info = {"Total users": num_users, "Number of Individual Permission Misconfigs": num_misconfig,
-                               "Percentage of Misconfig sessions": misconfig_perc,
-                               "Base file": base_filename, "Iteration": itr}
-            hover_texts = [
-                "<br>".join(misconfig_growth_metrics[k].get("reachable_users", []))
-                for k in number_of_misconfigs
-            ]
-            plot_chart_using_plotly(
-                x_values=number_of_misconfigs,
-                y_values=reachable_users_count,
-                x_label="Number of new Permission edges",
-                y_label="Number of users with path to Domain admins",
-                title="Evolution of Reachable Users During Individual Permission Misconfiguration Percolation",
-                file_name=f"permission-i-{itr}-{base_filename}",
-                additional_info=additional_info,
-                plot_type="line",
-                hover_texts=hover_texts
-            )
-            # plot_plot_chart(number_of_misconfigs, reachable_comps_count, "Number of Misconfigured Permissions",
-            #                 "Number of Reachable Computers",
-            #                 "Reachable Computers  vs Misconfiguration Permissions",
+        width = max(len(k) for k in indicators)
+        for k, v in indicators.items():
+            print(f"{k:<{width}} : {v}")
+            R = exposure_X(reachable_users_count, reachable_comps_count, num_users, num_computers)
+            Ru, Rc = exposure_parts(reachable_users_count, reachable_comps_count, num_users, num_computers)
+
+            print("R(p):", R)
+            print("|R∩U|/|U|:", Ru)
+            print("|R∩C|/|C|:", Rc)
+            # plot_plot_chart(number_of_misconfigs, reachable_comps_count, "Number of Misconfigured Sessions",
+            #                 "Number of Reachable Computers", "Reachable Computers (computers in all tiers) vs Misconfiguration Sessions",
             #                 additional_info, "line")
             misconfig_metrics_per_itr[itr] = misconfig_growth_metrics
             save_experiment_state(itr)
-            self.saveTofile(f"permission-i-{itr}-{base_filename}.json")
+            self.saveTofile(f"session-{itr}-{base_filename}.json")
+            # clear_exp_neo4j_db(self.driver.session())
+            # update_graph_db_with_temp_file(self.driver.session(), f"misconfig-session-temp={itr}")
+            # tabulate_experiment_results(self.driver.session(),misconfig_growth_metrics)
 
-        additional_info = {"Total users": num_users, "Number of Permission Misconfigs": num_misconfig,
-                           "Type": "Individual Permission misconfiguration",
-                           "Base file": base_filename}
-        plot_box_plot_using_plotty(misconfig_metrics_per_itr,
-                                   "Distribution of Number of  users with path to Domain admin per Misconfiguration Step (Iterations 1–N)",
-                                   "Number of misconfigurations",
-                                   "No of users with path to Domain admin",
-                                   "permission_i_boxplot",
-                                   additional_info
-                                   )
+            additional_info = {"Total users": num_users, "Type": "Session misconfiguration",
+                               "Number of Session Misconfigs": num_misconfig,
+                               "Step i": itr,
+                               "Base file": base_filename}
 
-        save_all_experiment_states_to_json(
-            f"/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/CodeSpace/ADSynth/generated_datasets/experiment_permission_i_{base_filename}.json",
-        )
+            width = max(len(k) for k in additional_info)
+            for k, v in additional_info.items():
+                print(f"{k:<{width}} : {v}")
 
-        with open(
-                f"/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/CodeSpace/ADSynth/generated_datasets/mgm_permission_{base_filename}.json",
-                "w") as f:
-            json.dump(misconfig_metrics_per_itr, f, indent=4)
-        # op_csv = export_user_level_data_to_csv(misconfig_metrics_per_itr, "permission_misconfig")
-        # df_surges = analyze_group_surges_from_csv(op_csv)
-        # print(df_surges.head(10))
-        parts = args.split(maxsplit=1)
+            # plot_box_plot_using_plotty(misconfig_metrics_per_itr,
+            #                            "Distribution of Number of  users with path to Domain admin per Misconfiguration Step (Iterations 1–N)",
+            #                            "Number of misconfigurations",
+            #                            "No of users with path to Domain admin",
+            #                            "session_boxplot",
+            #                            additional_info
+            #                            )
 
-        continue_to_next_misconfig = parts[0] if len(parts) > 0 else ""
-        if continue_to_next_misconfig == "true":
-            self.do_inject_group_permission_misconfigs(args)
-
-    def do_inject_group_permission_misconfigs(self, args):
-
-        nTiers = get_num_tiers(self.parameters)
-        num_users = get_int_param_value("User", "nUsers", self.parameters)
-        print("====================================================================")
-        print("== Injecting Permission Misconfigurations ==")
-
-        num_local_admin_groups = sum(len(subarray) for subarray in EXP_LOCAL_ADMINS)
-        # 2 lists for ACL and non-ACL permissions
-        # ACLs
-        acl_permission_probs = get_dict_param_value("ACLs", "ACLsProbability", self.parameters)
-        ACL_PERMISSIONS = get_acls_list(acl_permission_probs)
-
-        # Non-ACLs
-        non_acl_permission_probs = get_dict_param_value("nonACLs", "nonACLsProbability", self.parameters)
-        NON_ACL_PERMISSIONS = get_non_acls_list(non_acl_permission_probs)
-
-        # Establish the limit to attack Tier 0 for non_ACL permissions
-        misconfig_to_tier_0_allow, misconfig_to_tier_0_limit = get_misconfig_dict_param_value(
-            "misconfig_permissions_to_tier_0", self.parameters)
-
-        # ACL setup
-        acl_ratio = get_perc_param_value("misconfig_group", "acl_ratio", self.parameters)
-        admin_ratio = get_perc_param_value("misconfig_group", "admin_ratio", self.parameters)
-        departments_probs = get_dict_param_value("Group", "departmentProbability", self.parameters)
-        departments_list = get_departments_list(departments_probs)
-        locations = get_locations(self.parameters)
-
-        # Retrieve the number of misconfig
-        misconfig_perc = get_perc_param_value("perc_misconfig_permissions_on_groups", self.level, self.parameters) / 100
-        # num_misconfig = 10
-        num_misconfig = int(misconfig_perc * num_local_admin_groups)
-
-        # number of iterations -- original code used range(1,10) ; keep that but allow config
-        num_iterations = int(self.parameters.get("perm_misconfig_iterations", 10)) if isinstance(self.parameters,
-                                                                                                 dict) else 10
-
-        # int(misconfig_perc * num_users)
-        misconfig_metrics_per_itr = {}
-        base_filename = os.path.splitext(os.path.basename(self.parameters_json_path))[0]
-
-        domain_grp = "DOMAIN ADMINS@TESTLAB.LOCALE"
-        for itr in range(1, 6):
-            restore_experiment_state(itr)
-            nx_attack_graph = create_networkx_graph()
-
-            misconfig_growth_metrics = {}
-            for misconfig_num in range(num_misconfig):
-                nx_attack_graph = create_misconfig_permissions_on_groups_from_entrypoints(self.domain,
-                                                                                          nTiers,
-                                                                                          self.level,
-                                                                                          self.parameters,
-                                                                                          num_local_admin_groups,
-                                                                                          acl_ratio,
-                                                                                          admin_ratio,
-                                                                                          departments_list,
-                                                                                          locations,
-                                                                                          ACL_PERMISSIONS,
-                                                                                          NON_ACL_PERMISSIONS,
-                                                                                          misconfig_to_tier_0_allow,
-                                                                                          misconfig_to_tier_0_limit,
-                                                                                          misconfig_num,
-                                                                                          nx_attack_graph
-                                                                                          )
-
-                nx_attack_graph = create_networkx_graph()
-                find_user_count_with_path_to_DA(
-                    nx_attack_graph,
-                                domain_grp,
-                                misconfig_num,
-                                misconfig_growth_metrics
-                            )
-
-
-            number_of_misconfigs = sorted(misconfig_growth_metrics.keys())
-            reachable_users_count = [misconfig_growth_metrics[k]["reachable_users_count"] for k in
-                                     number_of_misconfigs]
-            reachable_comps_count = [misconfig_growth_metrics[k]["reachable_comps_count"] for k in
-                                     number_of_misconfigs]
-
-            additional_info = {"Total users": num_users, "Number of Group Permission Misconfigs": num_misconfig,
-                               "Base file": base_filename, "Iteration": itr}
-            hover_texts = [
-                "<br>".join(misconfig_growth_metrics[k].get("reachable_users", []))
-                for k in number_of_misconfigs
-            ]
-            plot_chart_using_plotly(
-                x_values=number_of_misconfigs,
-                y_values=reachable_users_count,
-                x_label="Number of new Permission edges",
-                y_label="Number of users with path to Domain admins",
-                title="Evolution of Reachable Users During Group Permission Misconfiguration Percolation",
-                file_name=f"permission-g-{itr}-{base_filename}",
-                additional_info=additional_info,
-                plot_type="line",
-                hover_texts=hover_texts
+            save_all_experiment_states_to_json(
+                f"/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/generated_datasets/experiment_session_{base_filename}.json",
             )
-            # plot_plot_chart(number_of_misconfigs, reachable_comps_count, "Number of Misconfigured Permissions",
-            #                 "Number of Reachable Computers",
-            #                 "Reachable Computers  vs Misconfiguration Permissions",
-            #                 additional_info, "line")
-            misconfig_metrics_per_itr[itr] = misconfig_growth_metrics
-            save_experiment_state(itr)
-            self.saveTofile(f"permission-g-{itr}-{base_filename}.json")
-            # try:
-            #     session = self.driver.session()
-            #     delete_neo4j_data(session)
-            #     update_db_with_temp_file(session, "perm_mc_final")
-            # except Exception:
-            #     pass
-        additional_info = {"Total users": num_users, "Number of Group Permission Misconfigs": num_misconfig,
-                           "Type": "Group Permission misconfiguration",
-                           "Base file": base_filename}
-        plot_box_plot_using_plotty(misconfig_metrics_per_itr,
-                                   "Distribution of Number of  users with path to Domain admin per Misconfiguration Step (Iterations 1–N)",
-                                   "Number of misconfigurations",
-                                   "No of users with path to Domain admin",
-                                   "permission_g_boxplot",
-                                   additional_info
-                                   )
 
-        # op_csv = export_user_level_data_to_csv(misconfig_metrics_per_itr, "permission_misconfig")
-        # df_surges = analyze_group_surges_from_csv(op_csv)
-        # print(df_surges.head(10))
+            with open(
+                    f"/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/generated_datasets/mgm_session_{base_filename}.json",
+                    "w") as f:
+                json.dump(misconfig_metrics_per_itr, f, indent=4)
+
+            # clear_exp_neo4j_db(self.driver.session())
+        # update_graph_db_with_temp_file(self.driver.session(), "misconfig-session-temp")
+        # op_csv = export_user_level_data_to_csv(misconfig_metrics_per_itr, "session_misconfig")
+        # analyze_group_surges_from_csv(op_csv)
+
+    parts = args.split(maxsplit=1)
+
+    continue_to_next_misconfig = parts[0] if len(parts) > 0 else ""
+
+    # if continue_to_next_misconfig == "true":
+    #         self.do_inject_individual_permission_misconfigs(args)
 
 
+def do_inject_individual_permission_misconfigs(self, args):
+    nTiers = get_num_tiers(self.parameters)
+    num_users = get_int_param_value("User", "nUsers", self.parameters)
+    print("====================================================================")
+    print("== Injecting Permission Misconfigurations ==")
 
-        save_all_experiment_states_to_json(
-            f"/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/CodeSpace/ADSynth/generated_datasets/experiment_permission_g_{base_filename}.json",
-        )
+    CP = ["AdminTo", "CanRDP", "CanPSRemote", "ExecuteDCOM", "AllowedToDelegate", "ReadLAPSPassword", "SQLAdmin",
+          "AllowedToAct"]
 
+    # number of iterations -- original code used range(1,10) ; keep that but allow config
+    num_iterations = int(self.parameters.get("perm_misconfig_iterations", 10)) if isinstance(self.parameters,
+                                                                                             dict) else 10
+    misconfig_perc = get_perc_param_value("perc_misconfig_permissions", self.level, self.parameters) / 100
+    # num_misconfig = int(misconfig_perc * num_users)
+    # num_misconfig = 10
+    num_misconfig = int(misconfig_perc * num_users)
+    misconfig_to_tier_0_allow, misconfig_to_tier_0_limit = get_misconfig_dict_param_value(
+        "misconfig_permissions_to_tier_0", self.parameters)
 
-        with open(
-                f"/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/CodeSpace/ADSynth/generated_datasets/mgm_permission_g_{base_filename}.json",
-                "w") as f:
-            json.dump(misconfig_metrics_per_itr, f, indent=4)
+    domain_grp = "DOMAIN ADMINS@TESTLAB.LOCALE"
 
-        parts = args.split(maxsplit=1)
+    misconfig_metrics_per_itr = {}
+    base_filename = os.path.splitext(os.path.basename(self.parameters_json_path))[0]
 
-        continue_to_next_misconfig = parts[0] if len(parts) > 0 else ""
+    for itr in range(1, 6):
+        restore_experiment_state(itr)
+        # init_experiment_state()
+        nx_attack_graph = create_networkx_graph()
 
-        if continue_to_next_misconfig == "true":
-            self.do_inject_group_nesting_misconfigs(args)
-
-    def do_inject_group_nesting_misconfigs(self, args):
-        nTiers = get_num_tiers(self.parameters)
-        num_local_admin_groups = sum(len(subarray) for subarray in EXP_LOCAL_ADMINS)
-        misconfig_perc = get_perc_param_value("perc_misconfig_nesting_groups", self.level, self.parameters) / 100
-        # num_misconfig = 2
-        num_misconfig = int(misconfig_perc * num_local_admin_groups)
-        num_users = get_int_param_value("User", "nUsers", self.parameters)
-        # Departments and locations
-        departments_probs = get_dict_param_value("Group", "departmentProbability", self.parameters)
-        departments_list = get_departments_list(departments_probs)
-        locations = get_locations(self.parameters)
-        domain_grp = "DOMAIN ADMINS@TESTLAB.LOCALE"
-        misconfig_metrics_per_itr = {}
-        for itr in range(1, 6):
-            restore_experiment_state(itr)
-            nx_attack_graph = create_networkx_graph()
-
-            misconfig_growth_metrics = {}
-            for misconfig_num in range(num_misconfig):
-                nx_attack_graph = create_misconfig_group_nesting_from_entrypoints(self.domain, nTiers, departments_list,
-                                                                                  locations,num_misconfig,nx_attack_graph)
-
-
+        misconfig_growth_metrics = {}
+        for misconfig_num in range(1, num_misconfig + 1):
+            nx_attack_graph = create_misconfig_permissions_on_individuals_from_entrypoints(
+                nTiers,
+                EXP_ADMIN_USERS,
+                EXP_ENABLED_USERS,
+                self.level,
+                self.parameters,
+                num_users,
+                CP,
+                misconfig_to_tier_0_allow,
+                misconfig_to_tier_0_limit,
+                misconfig_num,
+                nx_attack_graph
+            )
+            if misconfig_num % 5000 == 0:
                 nx_attack_graph = create_networkx_graph()
-
                 find_user_count_with_path_to_DA(
                     nx_attack_graph,
                     domain_grp,
@@ -1402,192 +1256,429 @@ class MainMenu(cmd.Cmd):
                     misconfig_growth_metrics
                 )
 
-            number_of_misconfigs = sorted(misconfig_growth_metrics.keys())
-            reachable_users_count = [misconfig_growth_metrics[k]["reachable_users_count"] for k in
-                                     number_of_misconfigs]
-            reachable_comps_count = [misconfig_growth_metrics[k]["reachable_comps_count"] for k in
-                                     number_of_misconfigs]
+        number_of_misconfigs = sorted(misconfig_growth_metrics.keys())
+        reachable_users_count = [misconfig_growth_metrics[k]["reachable_users_count"] for k in
+                                 number_of_misconfigs]
+        reachable_comps_count = [misconfig_growth_metrics[k]["reachable_comps_count"] for k in
+                                 number_of_misconfigs]
 
-            base_filename = os.path.splitext(os.path.basename(self.parameters_json_path))[0]
-            additional_info = {"Total users": num_users, "Number of Group Nesting Misconfigs": num_misconfig,
-                               "Base file": base_filename, "Iteration": itr}
-            hover_texts = [
-                "<br>".join(misconfig_growth_metrics[k].get("reachable_users", []))
-                for k in number_of_misconfigs
-            ]
-            plot_chart_using_plotly(
-                x_values=number_of_misconfigs,
-                y_values=reachable_users_count,
-                x_label="Number of new group nesting misconfigurations",
-                y_label="Number of users with path to Domain admins",
-                title="Evolution of Reachable Users During Group nesting Misconfiguration Percolation",
-                file_name=f"grp-nesting-{itr}-{base_filename}",
-                additional_info=additional_info,
-                plot_type="line",
-                hover_texts=hover_texts
-            )
-            # plot_plot_chart(number_of_misconfigs, reachable_comps_count, "Number of Misconfigured Permissions",
-            #                 "Number of Reachable Computers",
-            #                 "Reachable Computers  vs Misconfiguration Permissions",
-            #                 additional_info, "line")
-            misconfig_metrics_per_itr[itr] = misconfig_growth_metrics
-            save_experiment_state(itr)
-            self.saveTofile(f"grp-nesting-{itr}-{base_filename}.json")
-            # try:
-            #     session = self.driver.session()
-            #     delete_neo4j_data(session)
-            #     update_db_with_temp_file(session, "perm_mc_final")
-            # except Exception:
-            #     pass
-        additional_info = {"Total users": num_users, "Number of Group Nesting Misconfigs": num_misconfig,
-                           "Type": "Group Nesting misconfiguration",
-                           "Base file": base_filename}
-        plot_box_plot_using_plotty(misconfig_metrics_per_itr,
-                                   "Distribution of Number of  users with path to Domain admin per Misconfiguration Step (Iterations 1–N)",
-                                   "Number of misconfigurations",
-                                   "No of users with path to Domain admin",
-                                   "grp_nesting_boxplot",
-                                   additional_info
-                                   )
-        save_all_experiment_states_to_json(
-            f"/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/CodeSpace/ADSynth/generated_datasets/experiment_grp_nesting_{base_filename}.json",
+        additional_info = {"Total users": num_users, "Number of Individual Permission Misconfigs": num_misconfig,
+                           "Percentage of Misconfig sessions": misconfig_perc,
+                           "Base file": base_filename, "Iteration": itr}
+        hover_texts = [
+            "<br>".join(misconfig_growth_metrics[k].get("reachable_users", []))
+            for k in number_of_misconfigs
+        ]
+        plot_chart_using_plotly(
+            x_values=number_of_misconfigs,
+            y_values=reachable_users_count,
+            x_label="Number of new Permission edges",
+            y_label="Number of users with path to Domain admins",
+            title="Evolution of Reachable Users During Individual Permission Misconfiguration Percolation",
+            file_name=f"permission-i-{itr}-{base_filename}",
+            additional_info=additional_info,
+            plot_type="line",
+            hover_texts=hover_texts
         )
+        # plot_plot_chart(number_of_misconfigs, reachable_comps_count, "Number of Misconfigured Permissions",
+        #                 "Number of Reachable Computers",
+        #                 "Reachable Computers  vs Misconfiguration Permissions",
+        #                 additional_info, "line")
+        misconfig_metrics_per_itr[itr] = misconfig_growth_metrics
+        save_experiment_state(itr)
+        self.saveTofile(f"permission-i-{itr}-{base_filename}.json")
 
-        with open(
-                f"/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/CodeSpace/ADSynth/generated_datasets/mgm_grp_nesting_{base_filename}.json",
-                "w") as f:
-            json.dump(misconfig_metrics_per_itr, f, indent=4)
+    additional_info = {"Total users": num_users, "Number of Permission Misconfigs": num_misconfig,
+                       "Type": "Individual Permission misconfiguration",
+                       "Base file": base_filename}
+    plot_box_plot_using_plotty(misconfig_metrics_per_itr,
+                               "Distribution of Number of  users with path to Domain admin per Misconfiguration Step (Iterations 1–N)",
+                               "Number of misconfigurations",
+                               "No of users with path to Domain admin",
+                               "permission_i_boxplot",
+                               additional_info
+                               )
 
-        # op_csv = export_user_level_data_to_csv(misconfig_metrics_per_itr, "permission_misconfig")
-        # df_surges = analyze_group_surges_from_csv(op_csv)
-        # print(df_surges.head(10))
+    save_all_experiment_states_to_json(
+        f"/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/generated_datasets/experiment_permission_i_{base_filename}.json",
+    )
 
-        # save_all_experiment_states_to_json(
-        #     f"/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/CodeSpace/ADSynth/generated_datasets/experiment_grp_nesting.json",
-        # )
+    with open(
+            f"/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/generated_datasets/mgm_permission_{base_filename}.json",
+            "w") as f:
+        json.dump(misconfig_metrics_per_itr, f, indent=4)
+    # op_csv = export_user_level_data_to_csv(misconfig_metrics_per_itr, "permission_misconfig")
+    # df_surges = analyze_group_surges_from_csv(op_csv)
+    # print(df_surges.head(10))
+    parts = args.split(maxsplit=1)
+
+    continue_to_next_misconfig = parts[0] if len(parts) > 0 else ""
+    if continue_to_next_misconfig == "true":
+        self.do_inject_group_permission_misconfigs(args)
 
 
-        return nx_attack_graph
+def do_inject_group_permission_misconfigs(self, args):
+    nTiers = get_num_tiers(self.parameters)
+    num_users = get_int_param_value("User", "nUsers", self.parameters)
+    print("====================================================================")
+    print("== Injecting Permission Misconfigurations ==")
 
-    def saveTofile(self, filename):
-        with open(
-                f"/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/CodeSpace/ADSynth/generated_datasets/{filename}",
-                "w") as f:
-            for obj in EXP_NODES:
-                obj["type"] = "node"
-                # Use json.dumps() to convert the object to a JSON string without square brackets
-                json_str = json.dumps(obj, separators=(',', ':'))
-                # Write the JSON string to the file with a newline character
-                f.write(json_str + '\n')
+    num_local_admin_groups = sum(len(subarray) for subarray in EXP_LOCAL_ADMINS)
+    # 2 lists for ACL and non-ACL permissions
+    # ACLs
+    acl_permission_probs = get_dict_param_value("ACLs", "ACLsProbability", self.parameters)
+    ACL_PERMISSIONS = get_acls_list(acl_permission_probs)
 
-        # Open the file in append mode
-        with open(
-                f"/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/CodeSpace/ADSynth/generated_datasets/{filename}",
-                'a') as f:
-            print(f"generated_datasets/{filename}")
-            for obj in EXP_EDGES:
-                # Use json.dumps() to convert the object to a JSON string without square brackets
-                json_str = json.dumps(obj, separators=(',', ':'))
-                # Write the JSON string to the file with a newline character
-                f.write(json_str + '\n')
+    # Non-ACLs
+    non_acl_permission_probs = get_dict_param_value("nonACLs", "nonACLsProbability", self.parameters)
+    NON_ACL_PERMISSIONS = get_non_acls_list(non_acl_permission_probs)
 
-    def do_load_neo4jFromJson(self, args):
-        parts = args.split(maxsplit=3)
+    # Establish the limit to attack Tier 0 for non_ACL permissions
+    misconfig_to_tier_0_allow, misconfig_to_tier_0_limit = get_misconfig_dict_param_value(
+        "misconfig_permissions_to_tier_0", self.parameters)
 
-        filename = parts[0] if len(parts) > 0 else ""
-        clear_exp_neo4j_db(self.driver.session())
-        load_graph_from_file(self.driver.session(), filename)
+    # ACL setup
+    acl_ratio = get_perc_param_value("misconfig_group", "acl_ratio", self.parameters)
+    admin_ratio = get_perc_param_value("misconfig_group", "admin_ratio", self.parameters)
+    departments_probs = get_dict_param_value("Group", "departmentProbability", self.parameters)
+    departments_list = get_departments_list(departments_probs)
+    locations = get_locations(self.parameters)
 
-    def convert_keys(self, obj):
-        # If dict → convert each key recursively
-        if isinstance(obj, dict):
-            new_dict = {}
-            for k, v in obj.items():
-                try:
-                    # Convert keys like "1", "2" → int(1), int(2)
-                    new_key = int(k) if str(k).isdigit() else k
-                except (ValueError, TypeError):
-                    new_key = k
-                new_dict[new_key] = self.convert_keys(v)
-            return new_dict
-        # If list → convert each element recursively
-        elif isinstance(obj, list):
-            return [self.convert_keys(x) for x in obj]
-        # Otherwise leave primitive unchanged
-        else:
-            return obj
+    # Retrieve the number of misconfig
+    misconfig_perc = get_perc_param_value("perc_misconfig_permissions_on_groups", self.level, self.parameters) / 100
+    # num_misconfig = 10
+    num_misconfig = int(misconfig_perc * num_local_admin_groups)
 
-    def do_tabulateJson(self, args):
-        parts = args.split(maxsplit=3)
+    # number of iterations -- original code used range(1,10) ; keep that but allow config
+    num_iterations = int(self.parameters.get("perm_misconfig_iterations", 10)) if isinstance(self.parameters,
+                                                                                             dict) else 10
 
-        filename = parts[0] if len(parts) > 0 else ""
-        itr = int(parts[1] if len(parts) > 1 else 1)
-        misconfig_type = parts[2] if len(parts) > 2 else 1
+    # int(misconfig_perc * num_users)
+    misconfig_metrics_per_itr = {}
+    base_filename = os.path.splitext(os.path.basename(self.parameters_json_path))[0]
 
-        with open(
-                f"/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/CodeSpace/ADSynth/generated_datasets/{filename}",
-                "r") as f:
-            misconfig_metrics_per_itr = json.load(f)
-
-        misconfig_metrics_per_itr = self.convert_keys(misconfig_metrics_per_itr)
-
-        if itr:
-            tabulate_experiment_results(self.driver.session(), misconfig_metrics_per_itr[itr])
-        elif itr == -1:
-            for misconfig_growth_metrics in misconfig_metrics_per_itr:
-                tabulate_experiment_results(self.driver.session(), misconfig_metrics_per_itr[misconfig_growth_metrics],misconfig_type)
-
-    def do_push_graph_from_file(self, args):
-
-        parts = args.split(maxsplit=3)
-
-        filename = parts[0] if len(parts) > 0 else ""
-
-        abs_path = os.path.abspath(filename)
-        escaped_path = abs_path.replace("'", "\\'")  # replace single quote with escaped single quote
-
-        query = (
-            "PROFILE CALL apoc.periodic.iterate("
-            f"\"CALL apoc.import.json('{escaped_path}')\", "
-            "\"RETURN 1\", {batchSize: $bs})"
-        )
-
-        # Run (pass batch size as a parameter)
-        self.driver.session().run(query, bs=1000)
-
-    def do_load_experiment_state_graph_from_file(self, args):
-
-        parts = args.split(maxsplit=3)
-
-        filename = parts[0] if len(parts) > 0 else ""
-        itr = int(parts[1]) if len(parts) > 0 else 1
-        load_all_experiment_states_from_json( f"/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/CodeSpace/ADSynth/generated_datasets/{filename}")
-
+    domain_grp = "DOMAIN ADMINS@TESTLAB.LOCALE"
+    for itr in range(1, 6):
         restore_experiment_state(itr)
+        nx_attack_graph = create_networkx_graph()
+
+        misconfig_growth_metrics = {}
+        for misconfig_num in range(num_misconfig):
+            nx_attack_graph = create_misconfig_permissions_on_groups_from_entrypoints(self.domain,
+                                                                                      nTiers,
+                                                                                      self.level,
+                                                                                      self.parameters,
+                                                                                      num_local_admin_groups,
+                                                                                      acl_ratio,
+                                                                                      admin_ratio,
+                                                                                      departments_list,
+                                                                                      locations,
+                                                                                      ACL_PERMISSIONS,
+                                                                                      NON_ACL_PERMISSIONS,
+                                                                                      misconfig_to_tier_0_allow,
+                                                                                      misconfig_to_tier_0_limit,
+                                                                                      misconfig_num,
+                                                                                      nx_attack_graph
+                                                                                      )
+
+            nx_attack_graph = create_networkx_graph()
+            find_user_count_with_path_to_DA(
+                nx_attack_graph,
+                domain_grp,
+                misconfig_num,
+                misconfig_growth_metrics
+            )
+
+        number_of_misconfigs = sorted(misconfig_growth_metrics.keys())
+        reachable_users_count = [misconfig_growth_metrics[k]["reachable_users_count"] for k in
+                                 number_of_misconfigs]
+        reachable_comps_count = [misconfig_growth_metrics[k]["reachable_comps_count"] for k in
+                                 number_of_misconfigs]
+
+        additional_info = {"Total users": num_users, "Number of Group Permission Misconfigs": num_misconfig,
+                           "Base file": base_filename, "Iteration": itr}
+        hover_texts = [
+            "<br>".join(misconfig_growth_metrics[k].get("reachable_users", []))
+            for k in number_of_misconfigs
+        ]
+        plot_chart_using_plotly(
+            x_values=number_of_misconfigs,
+            y_values=reachable_users_count,
+            x_label="Number of new Permission edges",
+            y_label="Number of users with path to Domain admins",
+            title="Evolution of Reachable Users During Group Permission Misconfiguration Percolation",
+            file_name=f"permission-g-{itr}-{base_filename}",
+            additional_info=additional_info,
+            plot_type="line",
+            hover_texts=hover_texts
+        )
+        # plot_plot_chart(number_of_misconfigs, reachable_comps_count, "Number of Misconfigured Permissions",
+        #                 "Number of Reachable Computers",
+        #                 "Reachable Computers  vs Misconfiguration Permissions",
+        #                 additional_info, "line")
+        misconfig_metrics_per_itr[itr] = misconfig_growth_metrics
+        save_experiment_state(itr)
+        self.saveTofile(f"permission-g-{itr}-{base_filename}.json")
+        # try:
+        #     session = self.driver.session()
+        #     delete_neo4j_data(session)
+        #     update_db_with_temp_file(session, "perm_mc_final")
+        # except Exception:
+        #     pass
+    additional_info = {"Total users": num_users, "Number of Group Permission Misconfigs": num_misconfig,
+                       "Type": "Group Permission misconfiguration",
+                       "Base file": base_filename}
+    plot_box_plot_using_plotty(misconfig_metrics_per_itr,
+                               "Distribution of Number of  users with path to Domain admin per Misconfiguration Step (Iterations 1–N)",
+                               "Number of misconfigurations",
+                               "No of users with path to Domain admin",
+                               "permission_g_boxplot",
+                               additional_info
+                               )
+
+    # op_csv = export_user_level_data_to_csv(misconfig_metrics_per_itr, "permission_misconfig")
+    # df_surges = analyze_group_surges_from_csv(op_csv)
+    # print(df_surges.head(10))
+
+    save_all_experiment_states_to_json(
+        f"/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/generated_datasets/experiment_permission_g_{base_filename}.json",
+    )
+
+    with open(
+            f"/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/generated_datasets/mgm_permission_g_{base_filename}.json",
+            "w") as f:
+        json.dump(misconfig_metrics_per_itr, f, indent=4)
+
+    parts = args.split(maxsplit=1)
+
+    continue_to_next_misconfig = parts[0] if len(parts) > 0 else ""
+
+    if continue_to_next_misconfig == "true":
+        self.do_inject_group_nesting_misconfigs(args)
 
 
-    def do_load_iterations(self, args):
-        parts = args.split(maxsplit=3)
+def do_inject_group_nesting_misconfigs(self, args):
+    nTiers = get_num_tiers(self.parameters)
+    num_local_admin_groups = sum(len(subarray) for subarray in EXP_LOCAL_ADMINS)
+    misconfig_perc = get_perc_param_value("perc_misconfig_nesting_groups", self.level, self.parameters) / 100
+    # num_misconfig = 2
+    num_misconfig = int(misconfig_perc * num_local_admin_groups)
+    num_users = get_int_param_value("User", "nUsers", self.parameters)
+    # Departments and locations
+    departments_probs = get_dict_param_value("Group", "departmentProbability", self.parameters)
+    departments_list = get_departments_list(departments_probs)
+    locations = get_locations(self.parameters)
+    domain_grp = "DOMAIN ADMINS@TESTLAB.LOCALE"
+    misconfig_metrics_per_itr = {}
+    for itr in range(1, 6):
+        restore_experiment_state(itr)
+        nx_attack_graph = create_networkx_graph()
 
-        misconfig_type = parts[0] if len(parts) > 1 else ""
+        misconfig_growth_metrics = {}
+        for misconfig_num in range(num_misconfig):
+            nx_attack_graph = create_misconfig_group_nesting_from_entrypoints(self.domain, nTiers, departments_list,
+                                                                              locations, num_misconfig, nx_attack_graph)
 
-        experiment_file = parts[1] if len(parts) > 1 else ""
-        mgm_file = parts[2] if len(parts) > 2 else ""
-        itr = int(parts[4]) if len(parts) > 4 else 1
-        basefile = parts[3] if len(parts) > 3 else "secure_1k.json"
+            nx_attack_graph = create_networkx_graph()
 
-        # load_neo4jFromJson session-2-secure_1k.json
-        self.do_load_neo4jFromJson(f"{misconfig_type}-{itr}-{basefile}")
+            find_user_count_with_path_to_DA(
+                nx_attack_graph,
+                domain_grp,
+                misconfig_num,
+                misconfig_growth_metrics
+            )
 
-        # load_experiment_state_graph_from_file experiment_session_secure_1k.json 2
-        self.do_load_experiment_state_graph_from_file(f"{experiment_file} {itr}")
-        # tabulateJson mgm_session_secure_1k.json 2
+        number_of_misconfigs = sorted(misconfig_growth_metrics.keys())
+        reachable_users_count = [misconfig_growth_metrics[k]["reachable_users_count"] for k in
+                                 number_of_misconfigs]
+        reachable_comps_count = [misconfig_growth_metrics[k]["reachable_comps_count"] for k in
+                                 number_of_misconfigs]
 
-        if misconfig_type == "session":
-            self.do_tabulateJson(f"{mgm_file} {itr} session")
-        elif misconfig_type == "permission-i":
-            self.do_tabulateJson(f"{mgm_file} {itr} permission")
-        elif misconfig_type == "permission-g":
-            print(EXP_MISCONFIGURED_GRP_PERMISSION)
-        else :
-            print(EXP_MISCONFIGURED_GRP_NESTING)
+        base_filename = os.path.splitext(os.path.basename(self.parameters_json_path))[0]
+        additional_info = {"Total users": num_users, "Number of Group Nesting Misconfigs": num_misconfig,
+                           "Base file": base_filename, "Iteration": itr}
+        hover_texts = [
+            "<br>".join(misconfig_growth_metrics[k].get("reachable_users", []))
+            for k in number_of_misconfigs
+        ]
+        plot_chart_using_plotly(
+            x_values=number_of_misconfigs,
+            y_values=reachable_users_count,
+            x_label="Number of new group nesting misconfigurations",
+            y_label="Number of users with path to Domain admins",
+            title="Evolution of Reachable Users During Group nesting Misconfiguration Percolation",
+            file_name=f"grp-nesting-{itr}-{base_filename}",
+            additional_info=additional_info,
+            plot_type="line",
+            hover_texts=hover_texts
+        )
+        # plot_plot_chart(number_of_misconfigs, reachable_comps_count, "Number of Misconfigured Permissions",
+        #                 "Number of Reachable Computers",
+        #                 "Reachable Computers  vs Misconfiguration Permissions",
+        #                 additional_info, "line")
+        misconfig_metrics_per_itr[itr] = misconfig_growth_metrics
+        save_experiment_state(itr)
+        self.saveTofile(f"grp-nesting-{itr}-{base_filename}.json")
+        # try:
+        #     session = self.driver.session()
+        #     delete_neo4j_data(session)
+        #     update_db_with_temp_file(session, "perm_mc_final")
+        # except Exception:
+        #     pass
+    additional_info = {"Total users": num_users, "Number of Group Nesting Misconfigs": num_misconfig,
+                       "Type": "Group Nesting misconfiguration",
+                       "Base file": base_filename}
+    plot_box_plot_using_plotty(misconfig_metrics_per_itr,
+                               "Distribution of Number of  users with path to Domain admin per Misconfiguration Step (Iterations 1–N)",
+                               "Number of misconfigurations",
+                               "No of users with path to Domain admin",
+                               "grp_nesting_boxplot",
+                               additional_info
+                               )
+    save_all_experiment_states_to_json(
+        f"/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/generated_datasets/experiment_grp_nesting_{base_filename}.json",
+    )
+
+    with open(
+            f"/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/generated_datasets/mgm_grp_nesting_{base_filename}.json",
+            "w") as f:
+        json.dump(misconfig_metrics_per_itr, f, indent=4)
+
+    # op_csv = export_user_level_data_to_csv(misconfig_metrics_per_itr, "permission_misconfig")
+    # df_surges = analyze_group_surges_from_csv(op_csv)
+    # print(df_surges.head(10))
+
+    # save_all_experiment_states_to_json(
+    #     f"/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/generated_datasets/experiment_grp_nesting.json",
+    # )
+
+    return nx_attack_graph
+
+
+def saveTofile(self, filename):
+    with open(
+            f"/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/generated_datasets/{filename}",
+            "w") as f:
+        for obj in EXP_NODES:
+            obj["type"] = "node"
+            # Use json.dumps() to convert the object to a JSON string without square brackets
+            json_str = json.dumps(obj, separators=(',', ':'))
+            # Write the JSON string to the file with a newline character
+            f.write(json_str + '\n')
+
+    # Open the file in append mode
+    with open(
+            f"/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/generated_datasets/{filename}",
+            'a') as f:
+        print(f"generated_datasets/{filename}")
+        for obj in EXP_EDGES:
+            # Use json.dumps() to convert the object to a JSON string without square brackets
+            json_str = json.dumps(obj, separators=(',', ':'))
+            # Write the JSON string to the file with a newline character
+            f.write(json_str + '\n')
+
+
+def do_load_neo4jFromJson(self, args):
+    parts = args.split(maxsplit=3)
+
+    filename = parts[0] if len(parts) > 0 else ""
+    clear_exp_neo4j_db(self.driver.session())
+    load_graph_from_file(self.driver.session(), filename)
+
+
+def convert_keys(self, obj):
+    # If dict → convert each key recursively
+    if isinstance(obj, dict):
+        new_dict = {}
+        for k, v in obj.items():
+            try:
+                # Convert keys like "1", "2" → int(1), int(2)
+                new_key = int(k) if str(k).isdigit() else k
+            except (ValueError, TypeError):
+                new_key = k
+            new_dict[new_key] = self.convert_keys(v)
+        return new_dict
+    # If list → convert each element recursively
+    elif isinstance(obj, list):
+        return [self.convert_keys(x) for x in obj]
+    # Otherwise leave primitive unchanged
+    else:
+        return obj
+
+
+def do_tabulateJson(self, args):
+    parts = args.split(maxsplit=3)
+
+    filename = parts[0] if len(parts) > 0 else ""
+    itr = int(parts[1] if len(parts) > 1 else 1)
+    misconfig_type = parts[2] if len(parts) > 2 else 1
+
+    with open(
+            f"/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/generated_datasets/{filename}",
+            "r") as f:
+        misconfig_metrics_per_itr = json.load(f)
+
+    misconfig_metrics_per_itr = self.convert_keys(misconfig_metrics_per_itr)
+
+    if itr:
+        tabulate_experiment_results(self.driver.session(), misconfig_metrics_per_itr[itr])
+    elif itr == -1:
+        for misconfig_growth_metrics in misconfig_metrics_per_itr:
+            tabulate_experiment_results(self.driver.session(), misconfig_metrics_per_itr[misconfig_growth_metrics],
+                                        misconfig_type)
+
+
+def do_push_graph_from_file(self, args):
+    parts = args.split(maxsplit=3)
+
+    filename = parts[0] if len(parts) > 0 else ""
+
+    abs_path = os.path.abspath(filename)
+    escaped_path = abs_path.replace("'", "\\'")  # replace single quote with escaped single quote
+
+    query = (
+        "PROFILE CALL apoc.periodic.iterate("
+        f"\"CALL apoc.import.json('{escaped_path}')\", "
+        "\"RETURN 1\", {batchSize: $bs})"
+    )
+
+    # Run (pass batch size as a parameter)
+    self.driver.session().run(query, bs=1000)
+
+
+def do_load_experiment_state_graph_from_file(self, args):
+    parts = args.split(maxsplit=3)
+
+    filename = parts[0] if len(parts) > 0 else ""
+    itr = int(parts[1]) if len(parts) > 0 else 1
+    load_all_experiment_states_from_json(
+        f"/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/generated_datasets/{filename}")
+
+    restore_experiment_state(itr)
+
+
+def do_load_iterations(self, args):
+    parts = args.split(maxsplit=3)
+
+    misconfig_type = parts[0] if len(parts) > 1 else ""
+
+    experiment_file = parts[1] if len(parts) > 1 else ""
+    mgm_file = parts[2] if len(parts) > 2 else ""
+    itr = int(parts[4]) if len(parts) > 4 else 1
+    basefile = parts[3] if len(parts) > 3 else "secure_1k.json"
+
+    # load_neo4jFromJson session-2-secure_1k.json
+    self.do_load_neo4jFromJson(f"{misconfig_type}-{itr}-{basefile}")
+
+    # load_experiment_state_graph_from_file experiment_session_secure_1k.json 2
+    self.do_load_experiment_state_graph_from_file(f"{experiment_file} {itr}")
+    # tabulateJson mgm_session_secure_1k.json 2
+
+    if misconfig_type == "session":
+        self.do_tabulateJson(f"{mgm_file} {itr} session")
+    elif misconfig_type == "permission-i":
+        self.do_tabulateJson(f"{mgm_file} {itr} permission")
+    elif misconfig_type == "permission-g":
+        print(EXP_MISCONFIGURED_GRP_PERMISSION)
+    else:
+        print(EXP_MISCONFIGURED_GRP_NESTING)

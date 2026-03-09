@@ -435,7 +435,7 @@ import os
 def load_graph_from_file(session,filename: str):
 
 
-    file_path = f"/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/CodeSpace/ADSynth/generated_datasets/{filename}"
+    file_path = f"/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/generated_datasets/{filename}"
 
     if not os.path.exists(file_path):
         raise FileNotFoundError(f"File not found: {file_path}")
