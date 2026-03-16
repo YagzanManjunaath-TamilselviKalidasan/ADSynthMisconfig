@@ -974,46 +974,8 @@ class MainMenu(cmd.Cmd):
         self.do_generate(args)
         populate_node_tiers()
 
-    def do_test_all_configs(self, args):
-        config_list = [
-            "/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/adsynth/experiment_params/secure_1k.json  High",
-            "/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/adsynth/experiment_params/secure_5k.json  High",
-            "/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/adsynth/experiment_params/secure_10k.json  High",
-            "/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/adsynth/experiment_params/vul_1k.json Low",
-            "/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/adsynth/experiment_params/vul_5k.json Low",
-            "/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/adsynth/experiment_params/vul_10k.json Low"]
 
-        for config in config_list:
-            self.do_initialise_AD_graph_from_json(config)
-            self.do_inject_session_misconfigs("")
-            self.do_inject_permission_misconfigs("")
 
-    def do_initialise_1k_AD(self, args):
-        global neo4j
-        neo4j = safe_import_neo4j()
-        if neo4j is None:
-            return
-
-        self.password = "admin1234"
-        print("Current Settings")
-        print("DB Url: {}".format(self.url))
-        print("DB Username: {}".format(self.username))
-        print("DB Password: {}".format(self.password))
-        print("Use encryption: {}".format(self.use_encryption))
-        print("")
-
-        self.test_db_conn()
-
-        json_path = "/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/adsynth/experiment_params/secure_1k.json"
-        self.parameters = get_parameters_from_json(json_path)
-        if self.parameters == DEFAULT_CONFIGURATIONS:
-            self.parameters_json_path = "DEFAULT"
-        else:
-            self.parameters_json_path = json_path
-        delete_neo4j_data(self.driver.session())
-        print_all_parameters(self.parameters)
-        self.level = "High"
-        self.do_generate(args)
 
     def do_isolated_injection(self, args):
         injection_type = input("Injection Type [session/i_perm/g_perm/nesting]  : ")
@@ -1023,6 +985,41 @@ class MainMenu(cmd.Cmd):
             self.session_injection(args)
         elif injection_type == "i_perm":
             self.indi_permission_injection(args)
+
+    def run_injection_schedule(self, schedule_type, run_sequence=None):
+        if run_sequence is None:
+            run_sequence = []
+        if schedule_type == "isolated":
+            if  run_sequence and len(run_sequence) == 1 and run_sequence[0] in ["session", "i_perm", "g_perm", "nesting"] :
+                self.run_single_injection(run_sequence[0], schedule_type)
+
+        elif schedule_type == "mixed":
+            for injection_type in ["session", "i_perm", "g_perm", "nesting"]:
+                self.run_single_injection(injection_type, schedule_type)
+
+        elif schedule_type == "sequence" and  run_sequence and len(run_sequence) > 0:
+            for injection_type in run_sequence:
+                self.run_single_injection(injection_type, schedule_type)
+
+    def run_single_injection(self, injection_type, mode):
+        if injection_type == "session":
+            self.session_injection(mode)
+        elif injection_type == "i_perm":
+            self.indi_permission_injection(mode)
+        elif injection_type == "g_perm":
+            self.group_permission_injection(mode)
+        elif injection_type == "nesting":
+            self.group_nesting_injection(mode)
+
+    def run_single_injection(self, injection_type, mode):
+        if injection_type == "session":
+            self.session_injection(mode)
+        elif injection_type == "i_perm":
+            self.indi_permission_injection(mode)
+        elif injection_type == "g_perm":
+            self.group_permission_injection(mode)
+        elif injection_type == "nesting":
+            self.group_nesting_injection(mode)
 
     def session_injection(self, args):
         if len(NODES) == 0:
@@ -1580,10 +1577,10 @@ class MainMenu(cmd.Cmd):
             if itr == 0:
                 plot_metrics(num_users, num_computers, num_misconfig, base_filename, misconfig_growth_metrics)
 
-        mu = compute_mu(misconfig_metrics_per_itr, "X")
+        mu = compute_mu(misconfig_metrics_per_itr, "HCI")
         logging.info("Mu :%s", mu)
 
-        sigma2 = compute_sigma2(misconfig_metrics_per_itr, "X")
+        sigma2 = compute_sigma2(misconfig_metrics_per_itr, "HCI")
         logging.info("Sigma2 :%s", sigma2)
 
         p_star = max(sigma2, key=sigma2.get)
