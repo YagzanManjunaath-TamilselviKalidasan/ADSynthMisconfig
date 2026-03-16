@@ -249,3 +249,41 @@ def plot_box_plot_using_plotty(
     if file_name:
         fig.write_html(save_path)
     # fig.show()
+
+
+def plot_metrics(num_users,num_computers,num_misconfig,base_filename,misconfig_growth_metrics):
+    steps = sorted(misconfig_growth_metrics.keys())
+
+    # x axis
+    x_values = [misconfig_growth_metrics[s]["p"] for s in steps]
+
+    additional_info = {
+        "Total users": num_users,
+        "Total computers": num_computers,
+        "Num misconfigs": num_misconfig,
+        "Base file": base_filename,
+    }
+
+    metrics = {
+        "X": "Exposure X(p)",
+        "HCI": "HCI",
+        "CSM": "CSM",
+        "TBS": "TBS",
+        "pbcc": "PBCC"
+    }
+
+    for metric_key, metric_name in metrics.items():
+        y_values = [misconfig_growth_metrics[s][metric_key] for s in steps]
+
+        plot_plot_chart(
+            x_values=x_values,
+            y_values=y_values,
+            x_label="p",
+            y_label=metric_name,
+            title=f"{metric_name} vs Misconfiguration Level",
+            additional_info=additional_info,
+            plot_type="line"
+        )
+
+
+

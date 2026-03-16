@@ -213,3 +213,7 @@ SEC_DIST_GROUPS = list()
 
 LOCAL_ADMINS = list() # not processed names
 
+
+
+USER_TIER = {} #Tier of the user
+COMPUTER_TIER = {} # Tier of the computer
