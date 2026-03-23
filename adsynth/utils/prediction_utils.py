@@ -36,6 +36,7 @@ def estimate_indicator_thresholds(
 
     hci_vals = [row.get("HCI") for row in baseline if is_valid_number(row.get("HCI"))]
     csm_vals = [row.get("CSM") for row in baseline if is_valid_number(row.get("CSM"))]
+    tbs_vals = [row.get("TBS") for row in baseline if is_valid_number(row.get("TBS"))]
     pbcc_vals = [row.get("PBCC") for row in baseline if is_valid_number(row.get("PBCC"))]
 
     mu_hci = safe_mean(hci_vals)
@@ -46,10 +47,11 @@ def estimate_indicator_thresholds(
 
     # as per 1.3 -> mu_hci + 2 sigma_hci
 
-    tau_hci = None if mu_hci is None or sigma_hci is None else mu_hci + 2 * sigma_hci
+    # tau_hci = None if mu_hci is None or sigma_hci is None else mu_hci + 2 * sigma_hci
+    tau_hci = safe_percentile(hci_vals,95)
     # as per 1.3 -> 90th percentile
     tau_csm = safe_percentile(csm_vals, 90)
-    tau_tbs = 0.0
+    tau_tbs = safe_percentile(tbs_vals,90)
     tau_pbcc = None if mu_pbcc is None or sigma_pbcc is None else mu_pbcc + 2 * sigma_pbcc
 
     return {
@@ -108,7 +110,10 @@ def create_jump_labels(
     out = []
 
     n = len(metrics)
-    for i, (step, row) in enumerate(metrics.items()):
+    metrics_list = list(metrics.values())
+
+    for i, row in enumerate(metrics_list):
+
         new_row = dict(row)
 
         if i + k >= n:
@@ -128,7 +133,10 @@ def create_jump_labels(
 
 
 def compute_jump_labels(metrics: List[Dict]) -> List[Dict]:
-    configs = [(5, 0.10), (5, 0.20), (10, 0.10), (10, 0.20)]
+    configs = [(5, 0.005),
+(5, 0.01),
+(10, 0.01),
+(10, 0.02)]
 
     out = [dict(row) for row in metrics]
 
