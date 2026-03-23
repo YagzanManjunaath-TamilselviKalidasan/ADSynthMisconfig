@@ -163,7 +163,7 @@ class MisconfigInjectionPanel:
                                                          "Mixed mode can run multiple injection schedules\n Please select more than one schedule.")
                         )
                 elif mode == "sequence":
-                    self.menu.run_injection_schedule(output_name)
+                    self.menu.run_injection_schedule(mode,selected_injections)
 
                 self.parent.after(
                     0,

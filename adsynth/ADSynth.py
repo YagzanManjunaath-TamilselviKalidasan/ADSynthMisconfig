@@ -86,6 +86,7 @@ from timeit import default_timer as timer
 from datetime import datetime
 
 from adsynth.utils.plot_utils import plot_plot_chart, plot_box_plot_using_plotty, plot_chart_using_plotly, plot_metrics
+from adsynth.utils.prediction_utils import calc_thresholds_and_jump_labels
 
 
 def delete_neo4j_data(session):
@@ -221,6 +222,7 @@ class MainMenu(cmd.Cmd):
     # In case of code modification or ideas related to fundamental concepts of Active Directory, clear references are mentioned at the top of such functions.
 
     def __init__(self):
+        self.skip_plots = True
         self.m = Messages()
         self.url = "bolt://localhost:7687"
         self.username = "neo4j"
@@ -241,6 +243,8 @@ class MainMenu(cmd.Cmd):
         self.level = "Customized"
         self.dbname = None
         self.misconfig_enabled = True
+        # R realizations - iterations as of now
+        self.R = 20
         cmd.Cmd.__init__(self)
         logging.basicConfig(
             filename="app.log",
@@ -974,9 +978,6 @@ class MainMenu(cmd.Cmd):
         self.do_generate(args)
         populate_node_tiers()
 
-
-
-
     def do_isolated_injection(self, args):
         injection_type = input("Injection Type [session/i_perm/g_perm/nesting]  : ")
         args = "isolated"
@@ -990,14 +991,15 @@ class MainMenu(cmd.Cmd):
         if run_sequence is None:
             run_sequence = []
         if schedule_type == "isolated":
-            if  run_sequence and len(run_sequence) == 1 and run_sequence[0] in ["session", "i_perm", "g_perm", "nesting"] :
+            if run_sequence and len(run_sequence) == 1 and run_sequence[0] in ["session", "i_perm", "g_perm",
+                                                                               "nesting"]:
                 self.run_single_injection(run_sequence[0], schedule_type)
 
         elif schedule_type == "mixed":
             for injection_type in ["session", "i_perm", "g_perm", "nesting"]:
                 self.run_single_injection(injection_type, schedule_type)
 
-        elif schedule_type == "sequence" and  run_sequence and len(run_sequence) > 0:
+        elif schedule_type == "sequence" and run_sequence and len(run_sequence) > 0:
             for injection_type in run_sequence:
                 self.run_single_injection(injection_type, schedule_type)
 
@@ -1007,290 +1009,11 @@ class MainMenu(cmd.Cmd):
         elif injection_type == "i_perm":
             self.indi_permission_injection(mode)
         elif injection_type == "g_perm":
-            self.group_permission_injection(mode)
+            self.grp_permission_injection(mode)
         elif injection_type == "nesting":
-            self.group_nesting_injection(mode)
+            self.grp_nesting_injection(mode)
 
-    def run_single_injection(self, injection_type, mode):
-        if injection_type == "session":
-            self.session_injection(mode)
-        elif injection_type == "i_perm":
-            self.indi_permission_injection(mode)
-        elif injection_type == "g_perm":
-            self.group_permission_injection(mode)
-        elif injection_type == "nesting":
-            self.group_nesting_injection(mode)
 
-    def session_injection(self, args):
-        if len(NODES) == 0:
-            print("====================================================================")
-            print("== No graph intialised to generate misconfigurations ==")
-            return
-        nTiers = get_num_tiers(self.parameters)
-        num_users = get_int_param_value("User", "nUsers", self.parameters)
-        num_computers = get_int_param_value("Computer", "nComputers", self.parameters)
-
-        logging.info("====================================================================")
-        logging.info("== Injecting Session Misconfigurations ==")
-        logging.info("Num of Users %s", num_users)
-        logging.info("Num of Computers %s", num_computers)
-
-        N_baseline_session = get_baseline_from_AD("session", None)
-
-        # Assuming Max of 10% of misconfigurations for fine grained analysis
-        max_perc_misconfig_sessions = 0.1
-        num_misconfig = int(max_perc_misconfig_sessions * num_users)
-        high_value_target_name = "DOMAIN ADMINS@TESTLAB.LOCALE"
-
-        misconfig_metrics_per_itr = {}
-
-        base_filename = os.path.splitext(os.path.basename(self.parameters_json_path))[0]
-
-        # R realizations - iterations as of now
-        for itr in range(1, 2):
-            init_experiment_state()
-            networkx_graph = create_networkx_graph()
-
-            misconfig_growth_metrics = {}
-            for misconfig_session_count in range(1, num_misconfig + 1):
-                print(f"Injecting {misconfig_session_count}")
-                logging.info(f"New Session {misconfig_session_count}")
-                p = misconfig_session_count / N_baseline_session
-                networkx_graph = create_misconfig_sessions_from_entrypoints_multi_tiers(nTiers, networkx_graph,
-                                                                                        self.driver.session(),
-                                                                                        misconfig_session_count,
-                                                                                        self.level, self.parameters)
-                # if misconfig_session_count % 600 == 0:
-                networkx_graph = create_networkx_graph()
-                find_user_count_with_path_to_DA(networkx_graph, high_value_target_name, misconfig_session_count,
-                                                misconfig_growth_metrics)
-
-                misconfig_growth_metrics[misconfig_session_count]["p"] = p
-                misconfig_growth_metrics[misconfig_session_count]["X"] = exposure_X(
-                    misconfig_growth_metrics[misconfig_session_count]["reachable_users_count"],
-                    misconfig_growth_metrics[misconfig_session_count]["reachable_comps_count"], num_users,
-                    num_computers)
-                indicators_hci_csm_tbs(EXP_EDGES, misconfig_growth_metrics, misconfig_session_count, {2}, 1.0)
-                pbcc_result = pbcc_bounded_bfs_footholds(networkx_graph, WS_TIERS[2], high_value_target_name)
-                misconfig_growth_metrics[misconfig_session_count]["pbcc"] = pbcc_result["pbcc"]
-                logging.info(
-                    "step=%d users=%d comps=%d p=%.6f X=%.4f HCI=%.4f CSM=%.4f TBS=%.4f PBCC=%.4f",
-                    misconfig_session_count,
-                    misconfig_growth_metrics[misconfig_session_count]["reachable_users_count"],
-                    misconfig_growth_metrics[misconfig_session_count]["reachable_comps_count"],
-                    misconfig_growth_metrics[misconfig_session_count]["p"],
-                    misconfig_growth_metrics[misconfig_session_count]["X"],
-                    misconfig_growth_metrics[misconfig_session_count]["HCI"],
-                    misconfig_growth_metrics[misconfig_session_count]["CSM"],
-                    misconfig_growth_metrics[misconfig_session_count]["TBS"],
-                    misconfig_growth_metrics[misconfig_session_count]["pbcc"]
-                )
-            number_of_misconfigs = sorted(misconfig_growth_metrics.keys())
-
-            # plot_plot_chart(number_of_misconfigs, reachable_comps_count, "Number of Misconfigured Sessions",
-            #                 "Number of Reachable Computers", "Reachable Computers (computers in all tiers) vs Misconfiguration Sessions",
-            #                 additional_info, "line")
-            misconfig_metrics_per_itr[itr] = misconfig_growth_metrics
-            save_experiment_state(itr)
-            saveTofile(self, f"session-{itr}-{base_filename}.json")
-            # clear_exp_neo4j_db(self.driver.session())
-            # update_graph_db_with_temp_file(self.driver.session(), f"misconfig-session-temp={itr}")
-            # tabulate_experiment_results(self.driver.session(),misconfig_growth_metrics)
-
-            steps = sorted(misconfig_growth_metrics.keys())
-
-            # x axis
-            x_values = [misconfig_growth_metrics[s]["p"] for s in steps]
-
-            additional_info = {
-                "Total users": num_users,
-                "Total computers": num_computers,
-                "Num misconfigs": num_misconfig,
-                "Base file": base_filename,
-            }
-
-            metrics = {
-                "X": "Exposure X(p)",
-                "HCI": "HCI",
-                "CSM": "CSM",
-                "TBS": "TBS",
-                "pbcc": "PBCC"
-            }
-
-            for metric_key, metric_name in metrics.items():
-                y_values = [misconfig_growth_metrics[s][metric_key] for s in steps]
-
-                plot_plot_chart(
-                    x_values=x_values,
-                    y_values=y_values,
-                    x_label="p",
-                    y_label=metric_name,
-                    title=f"{metric_name} vs Misconfiguration Level",
-                    additional_info=additional_info,
-                    plot_type="line"
-                )
-        save_all_experiment_states_to_json(
-            f"/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/generated_datasets/experiment_session_{base_filename}.json",
-        )
-
-        with open(
-                f"/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/generated_datasets/mgm_session_{base_filename}.json",
-                "w") as f:
-            json.dump(misconfig_metrics_per_itr, f, indent=4)
-
-    def session_injection(self, args):
-        if len(NODES) == 0:
-            print("====================================================================")
-            print("== No graph intialised to generate misconfigurations ==")
-            return
-        nTiers = get_num_tiers(self.parameters)
-        num_users = get_int_param_value("User", "nUsers", self.parameters)
-        num_computers = get_int_param_value("Computer", "nComputers", self.parameters)
-
-        logging.info("====================================================================")
-        logging.info("== Injecting Session Misconfigurations ==")
-        logging.info("Num of Users %s", num_users)
-        logging.info("Num of Computers %s", num_computers)
-
-        N_baseline_session = get_baseline_from_AD("session")
-
-        # Assuming Max of 10% of misconfigurations for fine grained analysis
-        max_perc_misconfig_sessions = 0.1
-        num_misconfig = int(max_perc_misconfig_sessions * num_users)
-        high_value_target_name = "DOMAIN ADMINS@TESTLAB.LOCALE"
-
-        misconfig_metrics_per_itr = {}
-
-        base_filename = os.path.splitext(os.path.basename(self.parameters_json_path))[0]
-
-        # R realizations - iterations as of now
-        R = 20
-        for itr in range(R):
-            init_experiment_state()
-            networkx_graph = create_networkx_graph()
-
-            misconfig_growth_metrics = {}
-            for misconfig_session_count in range(1, num_misconfig + 1):
-                print(f"Injecting {misconfig_session_count}")
-                logging.info(f"New Session {misconfig_session_count}")
-                p = misconfig_session_count / N_baseline_session
-                networkx_graph = create_misconfig_sessions_from_entrypoints_multi_tiers(nTiers, networkx_graph,
-                                                                                        self.driver.session(),
-                                                                                        misconfig_session_count,
-                                                                                        self.level, self.parameters)
-                # if misconfig_session_count % 600 == 0:
-                networkx_graph = create_networkx_graph()
-                find_user_count_with_path_to_DA(networkx_graph, high_value_target_name, misconfig_session_count,
-                                                misconfig_growth_metrics)
-
-                misconfig_growth_metrics[misconfig_session_count]["p"] = p
-                misconfig_growth_metrics[misconfig_session_count]["X"] = exposure_X(
-                    misconfig_growth_metrics[misconfig_session_count]["reachable_users_count"],
-                    misconfig_growth_metrics[misconfig_session_count]["reachable_comps_count"], num_users,
-                    num_computers)
-                indicators_hci_csm_tbs(EXP_EDGES, misconfig_growth_metrics, misconfig_session_count, {2}, 1.0)
-                pbcc_result = pbcc_bounded_bfs_footholds(networkx_graph, WS_TIERS[2], high_value_target_name)
-                misconfig_growth_metrics[misconfig_session_count]["pbcc"] = pbcc_result["pbcc"]
-
-                misconfig_growth_metrics = compute_delta_X(misconfig_growth_metrics)
-                p_star = find_p_star(misconfig_growth_metrics)
-
-                # corr = np.corrcoef(HCI, deltaX)[0,1]
-
-                logging.info(
-                    "step=%d users=%d comps=%d p=%.6f X=%.4f delta_X=%.6f p_star=%.6f HCI=%.4f CSM=%.4f TBS=%.4f PBCC=%.4f",
-                    misconfig_session_count,
-                    misconfig_growth_metrics[misconfig_session_count]["reachable_users_count"],
-                    misconfig_growth_metrics[misconfig_session_count]["reachable_comps_count"],
-                    misconfig_growth_metrics[misconfig_session_count]["p"],
-                    misconfig_growth_metrics[misconfig_session_count]["X"],
-                    misconfig_growth_metrics[misconfig_session_count].get("delta_X", 0.0),
-                    p_star,
-                    misconfig_growth_metrics[misconfig_session_count]["HCI"],
-                    misconfig_growth_metrics[misconfig_session_count]["CSM"],
-                    misconfig_growth_metrics[misconfig_session_count]["TBS"],
-                    misconfig_growth_metrics[misconfig_session_count]["pbcc"]
-                )
-            number_of_misconfigs = sorted(misconfig_growth_metrics.keys())
-
-            corr = compute_hub_correlation(misconfig_growth_metrics)
-            logging.info("corr(HCI, ΔX) = %.4f", corr)
-
-            HCI = []
-            deltaX = []
-
-            for m in misconfig_growth_metrics.values():
-                if "delta_X" in m:
-                    HCI.append(m["HCI"])
-                    deltaX.append(m["delta_X"])
-
-            if itr == R - 1:
-                plot_plot_chart(
-                    x_values=HCI,
-                    y_values=deltaX,
-                    x_label="HCI",
-                    y_label="ΔX",
-                    title="Hub Concurrency vs Exposure Jump",
-                    additional_info={},
-                    plot_type="scatter"
-                )
-
-            misconfig_metrics_per_itr[itr] = misconfig_growth_metrics
-            save_experiment_state(itr)
-            saveTofile(self, f"session-{itr}-{base_filename}.json")
-            # clear_exp_neo4j_db(self.driver.session())
-            # update_graph_db_with_temp_file(self.driver.session(), f"misconfig-session-temp={itr}")
-            # tabulate_experiment_results(self.driver.session(),misconfig_growth_metrics)
-            if itr == 0:
-                plot_metrics(num_users, num_computers, num_misconfig, base_filename, misconfig_growth_metrics)
-
-        mu = compute_mu(misconfig_metrics_per_itr, "X")
-        logging.info("Mu :%s", mu)
-
-        sigma2 = compute_sigma2(misconfig_metrics_per_itr, "X")
-        logging.info("Sigma2 :%s", sigma2)
-
-        p_star = max(sigma2, key=sigma2.get)
-        logging.info("P* :%s", p_star)
-        run_metrics = misconfig_metrics_per_itr[0]
-
-        steps = sorted(run_metrics.keys())
-
-        X_values = [run_metrics[s]["X"] for s in steps]
-
-        ci = compute_mu_sigma_ci(X_values, 0.95)
-        logging.info("CI :%s", ci)
-
-        logging.info("====================================================================")
-
-        plot_plot_chart(
-            x_values=list(mu.keys()),
-            y_values=list(mu.values()),
-            x_label="p",
-            y_label="μ(p)",
-            title="Mean Exposure vs Misconfiguration Level",
-            additional_info={"R": R},
-            plot_type="line"
-        )
-
-        plot_plot_chart(
-            x_values=list(sigma2.keys()),
-            y_values=list(sigma2.values()),
-            x_label="p",
-            y_label="σ²(p)",
-            title="Exposure Variance vs Misconfiguration Level",
-            additional_info={"R": R},
-            plot_type="line"
-        )
-
-        save_all_experiment_states_to_json(
-            f"/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/generated_datasets/experiment_session_{base_filename}.json",
-        )
-
-        with open(
-                f"/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/generated_datasets/mgm_session_{base_filename}.json",
-                "w") as f:
-            json.dump(misconfig_metrics_per_itr, f, indent=4)
 
     def session_injection(self, args):
         if len(NODES) == 0:
@@ -1317,9 +1040,7 @@ class MainMenu(cmd.Cmd):
 
         base_filename = os.path.splitext(os.path.basename(self.parameters_json_path))[0]
 
-        # R realizations - iterations as of now
-        R = 20
-        for itr in range(R):
+        for itr in range(self.R):
             init_experiment_state()
             networkx_graph = create_networkx_graph()
 
@@ -1378,14 +1099,14 @@ class MainMenu(cmd.Cmd):
                     HCI.append(m["HCI"])
                     deltaX.append(m["delta_X"])
 
-            if itr == R - 1:
+            if itr == self.R - 1 and not self.skip_plots:
                 plot_plot_chart(
                     x_values=HCI,
                     y_values=deltaX,
                     x_label="HCI",
                     y_label="ΔX",
-                    title="Hub Concurrency vs Exposure Jump (session)",
-                    additional_info={},
+                    title="Hub Concurrency vs Exposure Jump",
+                    additional_info={"itr":itr},
                     plot_type="scatter"
                 )
 
@@ -1395,7 +1116,8 @@ class MainMenu(cmd.Cmd):
             # clear_exp_neo4j_db(self.driver.session())
             # update_graph_db_with_temp_file(self.driver.session(), f"misconfig-session-temp={itr}")
             # tabulate_experiment_results(self.driver.session(),misconfig_growth_metrics)
-            if itr == 0:
+            # if itr == 0 and not self.skip_plots:
+            if itr == self.R-1 :
                 plot_metrics(num_users, num_computers, num_misconfig, base_filename, misconfig_growth_metrics)
 
         mu = compute_mu(misconfig_metrics_per_itr, "X")
@@ -1404,9 +1126,15 @@ class MainMenu(cmd.Cmd):
         sigma2 = compute_sigma2(misconfig_metrics_per_itr, "X")
         logging.info("Sigma2 :%s", sigma2)
 
-        p_star = max(sigma2, key=sigma2.get)
+        if not sigma2:
+            logging.warning("Sigma2 is empty. Cannot compute p_star.")
+            p_star = None
+        else:
+            p_star = max(sigma2, key=sigma2.get)
         logging.info("P* :%s", p_star)
+
         run_metrics = misconfig_metrics_per_itr[0]
+
 
         steps = sorted(run_metrics.keys())
 
@@ -1417,25 +1145,26 @@ class MainMenu(cmd.Cmd):
 
         logging.info("====================================================================")
 
-        plot_plot_chart(
-            x_values=list(mu.keys()),
-            y_values=list(mu.values()),
-            x_label="p",
-            y_label="μ(p)",
-            title="Mean Exposure vs Misconfiguration Level (session)",
-            additional_info={"R": R},
-            plot_type="line"
-        )
+        if not self.skip_plots :
+                plot_plot_chart(
+                    x_values=list(mu.keys()),
+                    y_values=list(mu.values()),
+                    x_label="p",
+                    y_label="μ(p)",
+                    title="Mean Exposure vs Misconfiguration Level",
+                    additional_info={"R": self.R},
+                    plot_type="line"
+                )
 
-        plot_plot_chart(
-            x_values=list(sigma2.keys()),
-            y_values=list(sigma2.values()),
-            x_label="p",
-            y_label="σ²(p)",
-            title="Exposure Variance vs Misconfiguration Level (session)",
-            additional_info={"R": R},
-            plot_type="line"
-        )
+                plot_plot_chart(
+                    x_values=list(sigma2.keys()),
+                    y_values=list(sigma2.values()),
+                    x_label="p",
+                    y_label="σ²(p)",
+                    title="Exposure Variance vs Misconfiguration Level",
+                    additional_info={"R": self.R},
+                    plot_type="line"
+                )
 
         save_all_experiment_states_to_json(
             f"/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/generated_datasets/experiment_session_{base_filename}.json",
@@ -1446,6 +1175,7 @@ class MainMenu(cmd.Cmd):
                 "w") as f:
             json.dump(misconfig_metrics_per_itr, f, indent=4)
 
+        calc_thresholds_and_jump_labels(misconfig_metrics_per_itr[0])
 
     def indi_permission_injection(self, args):
         if len(NODES) == 0:
@@ -1484,9 +1214,7 @@ class MainMenu(cmd.Cmd):
 
         base_filename = os.path.splitext(os.path.basename(self.parameters_json_path))[0]
 
-        # R realizations - iterations as of now
-        R = 20
-        for itr in range(R):
+        for itr in range(self.R):
             if args == "isolated":
                 init_experiment_state()
             else:
@@ -1497,7 +1225,7 @@ class MainMenu(cmd.Cmd):
             misconfig_growth_metrics = {}
             for misconfig_indi_permission_count in range(1, num_misconfig + 1):
                 print(f"Injecting {misconfig_indi_permission_count}")
-                logging.info(f"New Session {misconfig_indi_permission_count}")
+                logging.info(f"New Indi Permission {misconfig_indi_permission_count}")
                 p = misconfig_indi_permission_count / N_baseline_indi_permission
                 networkx_graph = create_misconfig_permissions_on_individuals_from_entrypoints(
                     nTiers,
@@ -1520,7 +1248,8 @@ class MainMenu(cmd.Cmd):
                 misconfig_growth_metrics[misconfig_indi_permission_count]["p"] = p
                 misconfig_growth_metrics[misconfig_indi_permission_count]["X"] = exposure_X(
                     misconfig_growth_metrics[misconfig_indi_permission_count]["reachable_users_count"],
-                    misconfig_growth_metrics[misconfig_indi_permission_count]["reachable_comps_count"], num_users, num_computers)
+                    misconfig_growth_metrics[misconfig_indi_permission_count]["reachable_comps_count"], num_users,
+                    num_computers)
                 indicators_hci_csm_tbs(EXP_EDGES, misconfig_growth_metrics, misconfig_indi_permission_count, {2}, 1.0)
                 pbcc_result = pbcc_bounded_bfs_footholds(networkx_graph, WS_TIERS[2], high_value_target_name)
                 misconfig_growth_metrics[misconfig_indi_permission_count]["pbcc"] = pbcc_result["pbcc"]
@@ -1557,7 +1286,7 @@ class MainMenu(cmd.Cmd):
                     HCI.append(m["HCI"])
                     deltaX.append(m["delta_X"])
 
-            if itr == R - 1:
+            if itr == self.R - 1 and not self.skip_plots:
                 plot_plot_chart(
                     x_values=HCI,
                     y_values=deltaX,
@@ -1583,7 +1312,11 @@ class MainMenu(cmd.Cmd):
         sigma2 = compute_sigma2(misconfig_metrics_per_itr, "HCI")
         logging.info("Sigma2 :%s", sigma2)
 
-        p_star = max(sigma2, key=sigma2.get)
+        if not sigma2:
+            logging.warning("Sigma2 is empty. Cannot compute p_star.")
+            p_star = None
+        else:
+            p_star = max(sigma2, key=sigma2.get)
         logging.info("P* :%s", p_star)
         run_metrics = misconfig_metrics_per_itr[0]
 
@@ -1595,26 +1328,26 @@ class MainMenu(cmd.Cmd):
         logging.info("CI :%s", ci)
 
         logging.info("====================================================================")
+        if not self.skip_plots :
+                plot_plot_chart(
+                    x_values=list(mu.keys()),
+                    y_values=list(mu.values()),
+                    x_label="p",
+                    y_label="μ(p)",
+                    title="Mean Exposure vs Misconfiguration Level  (i_perm)",
+                    additional_info={"R": self.R},
+                    plot_type="line"
+                )
 
-        plot_plot_chart(
-            x_values=list(mu.keys()),
-            y_values=list(mu.values()),
-            x_label="p",
-            y_label="μ(p)",
-            title="Mean Exposure vs Misconfiguration Level  (i_perm)",
-            additional_info={"R": R},
-            plot_type="line"
-        )
-
-        plot_plot_chart(
-            x_values=list(sigma2.keys()),
-            y_values=list(sigma2.values()),
-            x_label="p",
-            y_label="σ²(p)",
-            title="Exposure Variance vs Misconfiguration Level (i_perm)",
-            additional_info={"R": R},
-            plot_type="line"
-        )
+                plot_plot_chart(
+                    x_values=list(sigma2.keys()),
+                    y_values=list(sigma2.values()),
+                    x_label="p",
+                    y_label="σ²(p)",
+                    title="Exposure Variance vs Misconfiguration Level (i_perm)",
+                    additional_info={"R": self.R},
+                    plot_type="line"
+                )
 
         save_all_experiment_states_to_json(
             f"/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/generated_datasets/experiment_i_perm_{base_filename}.json",
@@ -1624,8 +1357,6 @@ class MainMenu(cmd.Cmd):
                 f"/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/generated_datasets/mgm_i_perm_{base_filename}.json",
                 "w") as f:
             json.dump(misconfig_metrics_per_itr, f, indent=4)
-
-
 
     def grp_permission_injection(self, args):
         if len(NODES) == 0:
@@ -1653,22 +1384,7 @@ class MainMenu(cmd.Cmd):
         logging.info("Num of Users %s", num_users)
         logging.info("Num of Computers %s", num_computers)
 
-        N_baseline_indi_permission = get_baseline_from_AD("i_perm", CP)
-
-        misconfig_perc = get_perc_param_value("perc_misconfig_permissions", self.level, self.parameters) / 100
-        # num_misconfig = int(misconfig_perc * num_users)
-        # num_misconfig = 10
-        num_misconfig = int(misconfig_perc * num_users)
-        misconfig_to_tier_0_allow, misconfig_to_tier_0_limit = get_misconfig_dict_param_value(
-            "misconfig_permissions_to_tier_0", self.parameters)
-
-        misconfig_metrics_per_itr = {}
-        base_filename = os.path.splitext(os.path.basename(self.parameters_json_path))[0]
-
-        high_value_target_name = "DOMAIN ADMINS@TESTLAB.LOCALE"
-
-        misconfig_to_tier_0_allow, misconfig_to_tier_0_limit = get_misconfig_dict_param_value(
-            "misconfig_permissions_to_tier_0", self.parameters)
+        N_baseline_grp_permission = get_baseline_from_AD("g_perm", ACL_PERMISSIONS + NON_ACL_PERMISSIONS)
 
         # ACL setup
         acl_ratio = get_perc_param_value("misconfig_group", "acl_ratio", self.parameters)
@@ -1677,16 +1393,18 @@ class MainMenu(cmd.Cmd):
         departments_list = get_departments_list(departments_probs)
         locations = get_locations(self.parameters)
 
-        # Retrieve the number of misconfig
         misconfig_perc = get_perc_param_value("perc_misconfig_permissions_on_groups", self.level, self.parameters) / 100
+        num_misconfig = int(misconfig_perc * num_local_admin_groups)
+        misconfig_to_tier_0_allow, misconfig_to_tier_0_limit = get_misconfig_dict_param_value(
+            "misconfig_permissions_to_tier_0", self.parameters)
+
+        high_value_target_name = "DOMAIN ADMINS@TESTLAB.LOCALE"
 
         misconfig_metrics_per_itr = {}
 
         base_filename = os.path.splitext(os.path.basename(self.parameters_json_path))[0]
 
-        # R realizations - iterations as of now
-        R = 20
-        for itr in range(R):
+        for itr in range(self.R):
             if args == "isolated":
                 init_experiment_state()
             else:
@@ -1697,24 +1415,24 @@ class MainMenu(cmd.Cmd):
             misconfig_growth_metrics = {}
             for misconfig_grp_permission_count in range(1, num_misconfig + 1):
                 print(f"Injecting {misconfig_grp_permission_count}")
-                logging.info(f"New Session {misconfig_grp_permission_count}")
-                p = misconfig_grp_permission_count / N_baseline_indi_permission
-                networkx_graph =  create_misconfig_permissions_on_groups_from_entrypoints(self.domain,
-                                                                                      nTiers,
-                                                                                      self.level,
-                                                                                      self.parameters,
-                                                                                      num_local_admin_groups,
-                                                                                      acl_ratio,
-                                                                                      admin_ratio,
-                                                                                      departments_list,
-                                                                                      locations,
-                                                                                      ACL_PERMISSIONS,
-                                                                                      NON_ACL_PERMISSIONS,
-                                                                                      misconfig_to_tier_0_allow,
-                                                                                      misconfig_to_tier_0_limit,
-                                                                                      itr,
-                                                                                      networkx_graph
-                                                                                      )
+                logging.info(f"New Grp Permission {misconfig_grp_permission_count}")
+                p = misconfig_grp_permission_count / N_baseline_grp_permission
+                networkx_graph = create_misconfig_permissions_on_groups_from_entrypoints(self.domain,
+                                                                                         nTiers,
+                                                                                         self.level,
+                                                                                         self.parameters,
+                                                                                         num_local_admin_groups,
+                                                                                         acl_ratio,
+                                                                                         admin_ratio,
+                                                                                         departments_list,
+                                                                                         locations,
+                                                                                         ACL_PERMISSIONS,
+                                                                                         NON_ACL_PERMISSIONS,
+                                                                                         misconfig_to_tier_0_allow,
+                                                                                         misconfig_to_tier_0_limit,
+                                                                                         itr,
+                                                                                         networkx_graph
+                                                                                         )
                 # if misconfig_session_count % 600 == 0:
                 networkx_graph = create_networkx_graph()
                 find_user_count_with_path_to_DA(networkx_graph, high_value_target_name, misconfig_grp_permission_count,
@@ -1723,7 +1441,8 @@ class MainMenu(cmd.Cmd):
                 misconfig_growth_metrics[misconfig_grp_permission_count]["p"] = p
                 misconfig_growth_metrics[misconfig_grp_permission_count]["X"] = exposure_X(
                     misconfig_growth_metrics[misconfig_grp_permission_count]["reachable_users_count"],
-                    misconfig_growth_metrics[misconfig_grp_permission_count]["reachable_comps_count"], num_users, num_computers)
+                    misconfig_growth_metrics[misconfig_grp_permission_count]["reachable_comps_count"], num_users,
+                    num_computers)
                 indicators_hci_csm_tbs(EXP_EDGES, misconfig_growth_metrics, misconfig_grp_permission_count, {2}, 1.0)
                 pbcc_result = pbcc_bounded_bfs_footholds(networkx_graph, WS_TIERS[2], high_value_target_name)
                 misconfig_growth_metrics[misconfig_grp_permission_count]["pbcc"] = pbcc_result["pbcc"]
@@ -1760,7 +1479,7 @@ class MainMenu(cmd.Cmd):
                     HCI.append(m["HCI"])
                     deltaX.append(m["delta_X"])
 
-            if itr == R - 1:
+            if itr == self.R - 1 and not self.skip_plots:
                 plot_plot_chart(
                     x_values=HCI,
                     y_values=deltaX,
@@ -1786,7 +1505,182 @@ class MainMenu(cmd.Cmd):
         sigma2 = compute_sigma2(misconfig_metrics_per_itr, "X")
         logging.info("Sigma2 :%s", sigma2)
 
-        p_star = max(sigma2, key=sigma2.get)
+        if not sigma2:
+            logging.warning("Sigma2 is empty. Cannot compute p_star.")
+            p_star = None
+        else:
+            p_star = max(sigma2, key=sigma2.get)
+        logging.info("P* :%s", p_star)
+        run_metrics = misconfig_metrics_per_itr[0]
+
+        steps = sorted(run_metrics.keys())
+
+        X_values = [run_metrics[s]["X"] for s in steps]
+
+        ci = compute_mu_sigma_ci(X_values, 0.95)
+        logging.info("CI :%s", ci)
+
+        logging.info("====================================================================")
+        if not self.skip_plots:
+                plot_plot_chart(
+                    x_values=list(mu.keys()),
+                    y_values=list(mu.values()),
+                    x_label="p",
+                    y_label="μ(p)",
+                    title="Mean Exposure vs Misconfiguration Level  (g_perm)",
+                    additional_info={"R": self.R},
+                    plot_type="line"
+                )
+
+                plot_plot_chart(
+                    x_values=list(sigma2.keys()),
+                    y_values=list(sigma2.values()),
+                    x_label="p",
+                    y_label="σ²(p)",
+                    title="Exposure Variance vs Misconfiguration Level (g_perm)",
+                    additional_info={"R": self.R},
+                    plot_type="line"
+                )
+
+        save_all_experiment_states_to_json(
+            f"/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/generated_datasets/experiment_g_perm_{base_filename}.json",
+        )
+
+        with open(
+                f"/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/generated_datasets/mgm_g_perm_{base_filename}.json",
+                "w") as f:
+            json.dump(misconfig_metrics_per_itr, f, indent=4)
+
+
+    def grp_nesting_injection(self, args):
+        if len(NODES) == 0:
+            print("====================================================================")
+            print("== No graph intialised to generate misconfigurations ==")
+            return
+        nTiers = get_num_tiers(self.parameters)
+
+        num_users = get_int_param_value("User", "nUsers", self.parameters)
+
+        num_computers = get_int_param_value("Computer", "nComputers", self.parameters)
+
+        num_local_admin_groups = sum(len(subarray) for subarray in EXP_LOCAL_ADMINS)
+        misconfig_perc = get_perc_param_value("perc_misconfig_nesting_groups", self.level, self.parameters) / 100
+        num_misconfig = int(misconfig_perc * num_local_admin_groups)
+
+        logging.info("====================================================================")
+        logging.info("== Injecting Group Nesting Misconfigurations ==")
+        logging.info("Num of Users %s", num_users)
+        logging.info("Num of Computers %s", num_computers)
+
+        N_baseline_grp_nesting = get_baseline_from_AD("nesting", None)
+
+        # Nesting setup
+        departments_probs = get_dict_param_value("Group", "departmentProbability", self.parameters)
+        departments_list = get_departments_list(departments_probs)
+        locations = get_locations(self.parameters)
+
+        misconfig_metrics_per_itr = {}
+        base_filename = os.path.splitext(os.path.basename(self.parameters_json_path))[0]
+
+        high_value_target_name = "DOMAIN ADMINS@TESTLAB.LOCALE"
+
+        misconfig_metrics_per_itr = {}
+
+        base_filename = os.path.splitext(os.path.basename(self.parameters_json_path))[0]
+
+        for itr in range(self.R):
+            if args == "isolated":
+                init_experiment_state()
+            else:
+                restore_experiment_state(itr)
+
+            networkx_graph = create_networkx_graph()
+
+            misconfig_growth_metrics = {}
+            for misconfig_grp_nesting_count in range(1, num_misconfig + 1):
+                print(f"Injecting {misconfig_grp_nesting_count}")
+                logging.info(f"New Nesting {misconfig_grp_nesting_count}")
+                p = misconfig_grp_nesting_count / N_baseline_grp_nesting
+                networkx_graph = create_misconfig_group_nesting_from_entrypoints(self.domain, nTiers, departments_list,
+                                                                                 locations, num_misconfig,
+                                                                                 networkx_graph)
+                # if misconfig_session_count % 600 == 0:
+                networkx_graph = create_networkx_graph()
+                find_user_count_with_path_to_DA(networkx_graph, high_value_target_name, misconfig_grp_nesting_count,
+                                                misconfig_growth_metrics)
+
+                misconfig_growth_metrics[misconfig_grp_nesting_count]["p"] = p
+                misconfig_growth_metrics[misconfig_grp_nesting_count]["X"] = exposure_X(
+                    misconfig_growth_metrics[misconfig_grp_nesting_count]["reachable_users_count"],
+                    misconfig_growth_metrics[misconfig_grp_nesting_count]["reachable_comps_count"], num_users,
+                    num_computers)
+                indicators_hci_csm_tbs(EXP_EDGES, misconfig_growth_metrics, misconfig_grp_nesting_count, {2}, 1.0)
+                pbcc_result = pbcc_bounded_bfs_footholds(networkx_graph, WS_TIERS[2], high_value_target_name)
+                misconfig_growth_metrics[misconfig_grp_nesting_count]["pbcc"] = pbcc_result["pbcc"]
+
+                misconfig_growth_metrics = compute_delta_X(misconfig_growth_metrics)
+                p_star = find_p_star(misconfig_growth_metrics)
+
+                # corr = np.corrcoef(HCI, deltaX)[0,1]
+
+                logging.info(
+                    "step=%d users=%d comps=%d p=%.6f X=%.4f delta_X=%.6f p_star=%.6f HCI=%.4f CSM=%.4f TBS=%.4f PBCC=%.4f",
+                    misconfig_grp_nesting_count,
+                    misconfig_growth_metrics[misconfig_grp_nesting_count]["reachable_users_count"],
+                    misconfig_growth_metrics[misconfig_grp_nesting_count]["reachable_comps_count"],
+                    misconfig_growth_metrics[misconfig_grp_nesting_count]["p"],
+                    misconfig_growth_metrics[misconfig_grp_nesting_count]["X"],
+                    misconfig_growth_metrics[misconfig_grp_nesting_count].get("delta_X", 0.0),
+                    p_star,
+                    misconfig_growth_metrics[misconfig_grp_nesting_count]["HCI"],
+                    misconfig_growth_metrics[misconfig_grp_nesting_count]["CSM"],
+                    misconfig_growth_metrics[misconfig_grp_nesting_count]["TBS"],
+                    misconfig_growth_metrics[misconfig_grp_nesting_count]["pbcc"]
+                )
+            number_of_misconfigs = sorted(misconfig_growth_metrics.keys())
+
+            corr = compute_hub_correlation(misconfig_growth_metrics)
+            logging.info("corr(HCI, ΔX) = %.4f", corr)
+
+            HCI = []
+            deltaX = []
+
+            for m in misconfig_growth_metrics.values():
+                if "delta_X" in m:
+                    HCI.append(m["HCI"])
+                    deltaX.append(m["delta_X"])
+
+            if itr == self.R - 1:
+                plot_plot_chart(
+                    x_values=HCI,
+                    y_values=deltaX,
+                    x_label="HCI",
+                    y_label="ΔX",
+                    title="Hub Concurrency vs Exposure Jump (g_nesting)",
+                    additional_info={},
+                    plot_type="scatter"
+                )
+
+            misconfig_metrics_per_itr[itr] = misconfig_growth_metrics
+            save_experiment_state(itr)
+            saveTofile(self, f"g_nest-{itr}-{base_filename}.json")
+            # clear_exp_neo4j_db(self.driver.session())
+            # update_graph_db_with_temp_file(self.driver.session(), f"misconfig-session-temp={itr}")
+            # tabulate_experiment_results(self.driver.session(),misconfig_growth_metrics)
+            if itr == 0:
+                plot_metrics(num_users, num_computers, num_misconfig, base_filename, misconfig_growth_metrics)
+
+        mu = compute_mu(misconfig_metrics_per_itr, "X")
+        logging.info("Mu :%s", mu)
+
+        sigma2 = compute_sigma2(misconfig_metrics_per_itr, "X")
+        logging.info("Sigma2 :%s", sigma2)
+
+        if not sigma2:
+            logging.warning("Sigma2 is empty. Cannot compute p_star.")
+            p_star = None
+        else:
+            p_star = max(sigma2, key=sigma2.get)
         logging.info("P* :%s", p_star)
         run_metrics = misconfig_metrics_per_itr[0]
 
@@ -1804,8 +1698,8 @@ class MainMenu(cmd.Cmd):
             y_values=list(mu.values()),
             x_label="p",
             y_label="μ(p)",
-            title="Mean Exposure vs Misconfiguration Level  (g_perm)",
-            additional_info={"R": R},
+            title="Mean Exposure vs Misconfiguration Level  (g_nest)",
+            additional_info={"R": self.R},
             plot_type="line"
         )
 
@@ -1814,118 +1708,19 @@ class MainMenu(cmd.Cmd):
             y_values=list(sigma2.values()),
             x_label="p",
             y_label="σ²(p)",
-            title="Exposure Variance vs Misconfiguration Level (g_perm)",
-            additional_info={"R": R},
+            title="Exposure Variance vs Misconfiguration Level (g_nest)",
+            additional_info={"R": self.R},
             plot_type="line"
         )
 
         save_all_experiment_states_to_json(
-            f"/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/generated_datasets/experiment_g_perm_{base_filename}.json",
+            f"/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/generated_datasets/experiment_g_nest_{base_filename}.json",
         )
 
         with open(
-                f"/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/generated_datasets/mgm_g_perm_{base_filename}.json",
+                f"/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/generated_datasets/mgm_g_nest_{base_filename}.json",
                 "w") as f:
             json.dump(misconfig_metrics_per_itr, f, indent=4)
-
-
-
-def do_inject_group_nesting_misconfigs(self, args):
-    nTiers = get_num_tiers(self.parameters)
-    num_local_admin_groups = sum(len(subarray) for subarray in EXP_LOCAL_ADMINS)
-    misconfig_perc = get_perc_param_value("perc_misconfig_nesting_groups", self.level, self.parameters) / 100
-    # num_misconfig = 2
-    num_misconfig = int(misconfig_perc * num_local_admin_groups)
-    num_users = get_int_param_value("User", "nUsers", self.parameters)
-    # Departments and locations
-    departments_probs = get_dict_param_value("Group", "departmentProbability", self.parameters)
-    departments_list = get_departments_list(departments_probs)
-    locations = get_locations(self.parameters)
-    domain_grp = "DOMAIN ADMINS@TESTLAB.LOCALE"
-    misconfig_metrics_per_itr = {}
-    for itr in range(1, 6):
-        restore_experiment_state(itr)
-        nx_attack_graph = create_networkx_graph()
-
-        misconfig_growth_metrics = {}
-        for misconfig_num in range(num_misconfig):
-            nx_attack_graph = create_misconfig_group_nesting_from_entrypoints(self.domain, nTiers, departments_list,
-                                                                              locations, num_misconfig, nx_attack_graph)
-
-            nx_attack_graph = create_networkx_graph()
-
-            find_user_count_with_path_to_DA(
-                nx_attack_graph,
-                domain_grp,
-                misconfig_num,
-                misconfig_growth_metrics
-            )
-
-        number_of_misconfigs = sorted(misconfig_growth_metrics.keys())
-        reachable_users_count = [misconfig_growth_metrics[k]["reachable_users_count"] for k in
-                                 number_of_misconfigs]
-        reachable_comps_count = [misconfig_growth_metrics[k]["reachable_comps_count"] for k in
-                                 number_of_misconfigs]
-
-        base_filename = os.path.splitext(os.path.basename(self.parameters_json_path))[0]
-        additional_info = {"Total users": num_users, "Number of Group Nesting Misconfigs": num_misconfig,
-                           "Base file": base_filename, "Iteration": itr}
-        hover_texts = [
-            "<br>".join(misconfig_growth_metrics[k].get("reachable_users", []))
-            for k in number_of_misconfigs
-        ]
-        plot_chart_using_plotly(
-            x_values=number_of_misconfigs,
-            y_values=reachable_users_count,
-            x_label="Number of new group nesting misconfigurations",
-            y_label="Number of users with path to Domain admins",
-            title="Evolution of Reachable Users During Group nesting Misconfiguration Percolation",
-            file_name=f"grp-nesting-{itr}-{base_filename}",
-            additional_info=additional_info,
-            plot_type="line",
-            hover_texts=hover_texts
-        )
-        # plot_plot_chart(number_of_misconfigs, reachable_comps_count, "Number of Misconfigured Permissions",
-        #                 "Number of Reachable Computers",
-        #                 "Reachable Computers  vs Misconfiguration Permissions",
-        #                 additional_info, "line")
-        misconfig_metrics_per_itr[itr] = misconfig_growth_metrics
-        save_experiment_state(itr)
-        self.saveTofile(f"grp-nesting-{itr}-{base_filename}.json")
-        # try:
-        #     session = self.driver.session()
-        #     delete_neo4j_data(session)
-        #     update_db_with_temp_file(session, "perm_mc_final")
-        # except Exception:
-        #     pass
-    additional_info = {"Total users": num_users, "Number of Group Nesting Misconfigs": num_misconfig,
-                       "Type": "Group Nesting misconfiguration",
-                       "Base file": base_filename}
-    plot_box_plot_using_plotty(misconfig_metrics_per_itr,
-                               "Distribution of Number of  users with path to Domain admin per Misconfiguration Step (Iterations 1–N)",
-                               "Number of misconfigurations",
-                               "No of users with path to Domain admin",
-                               "grp_nesting_boxplot",
-                               additional_info
-                               )
-    save_all_experiment_states_to_json(
-        f"/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/generated_datasets/experiment_grp_nesting_{base_filename}.json",
-    )
-
-    with open(
-            f"/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/generated_datasets/mgm_grp_nesting_{base_filename}.json",
-            "w") as f:
-        json.dump(misconfig_metrics_per_itr, f, indent=4)
-
-    # op_csv = export_user_level_data_to_csv(misconfig_metrics_per_itr, "permission_misconfig")
-    # df_surges = analyze_group_surges_from_csv(op_csv)
-    # print(df_surges.head(10))
-
-    # save_all_experiment_states_to_json(
-    #     f"/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/generated_datasets/experiment_grp_nesting.json",
-    # )
-
-    return nx_attack_graph
 
 
 def saveTofile(self, filename):

@@ -1,4 +1,6 @@
+import math
 import re
+from typing import List, Optional, Dict
 
 import numpy as np
 
@@ -35,12 +37,15 @@ def get_baseline_from_AD(misconfig_type, TARGET_LABELS):
     if misconfig_type == "session":
         baseline_has_session = sum(1 for edge in EDGES if edge.get("label") == "HasSession")
         return baseline_has_session
-    elif misconfig_type == "i_perm":
+    elif misconfig_type == "i_perm" or misconfig_type == "g_perm":
         baseline_edges = [
             edge for edge in EDGES
             if edge.get("label") in TARGET_LABELS
         ]
         return len(baseline_edges)
+    elif misconfig_type == "nesting":
+        baseline_member_of = sum(1 for edge in EDGES if edge.get("label") == "MemberOf")
+        return baseline_member_of
 
 
 def comp_tier_fn(node_name_or_id: str, labels=()) -> int:
@@ -55,10 +60,19 @@ def comp_tier_fn(node_name_or_id: str, labels=()) -> int:
 
 
 def user_tier_fn(dn: str):
-    if not dn:
-        return None
-    m = re.search(r"OU=T(\d+)\b", dn, flags=re.IGNORECASE)
-    return int(m.group(1)) if m else 2
+
+    try:
+        s = next((x for x in NODES if x["id"] == dn), None)
+
+        name = s["properties"]["name"]
+        return USER_TIER[name]
+    # todo check
+    except KeyError:
+        return -1
+    # if not dn:
+    #     return None
+    # m = re.search(r"OU=T(\d+)\b", dn, flags=re.IGNORECASE)
+    # return int(m.group(1)) if m else 2
 
 
 def indicators_hci_csm_tbs(EXP_EDGE, misconfig_growth_metrics, misconfig_session_count, low_tiers={2}, eps=1.0):
@@ -331,6 +345,8 @@ def compute_hub_correlation(misconfig_growth_metrics):
         HCI.append(m["HCI"])
         deltaX.append(m["delta_X"])
 
+    if len(HCI) < 2 or np.std(HCI) == 0 or np.std(deltaX) == 0:
+        return 0
     corr = np.corrcoef(HCI, deltaX)[0, 1]
 
     return corr
@@ -387,9 +403,104 @@ def compute_mu_sigma_ci(values, confidence=0.95):
 def compute_p_star_ci(p_star_values):
     p_star_values = np.array(p_star_values)
 
-    mean_p_star = np.mean(p_star_values)
+    if not p_star_values:
+        mean_p_star = 0.0
+    else:
+        mean_p_star = float(np.mean(p_star_values))
+
 
     ci_low = np.percentile(p_star_values, 2.5)
     ci_high = np.percentile(p_star_values, 97.5)
 
     return mean_p_star, ci_low, ci_high
+
+
+def is_valid_number(x):
+    return x is not None and not (isinstance(x, float) and math.isnan(x))
+
+
+def safe_mean(values: List[float]) -> Optional[float]:
+    values = [float(v) for v in values if is_valid_number(v)]
+    if not values:
+        return None
+    return float(np.mean(values))
+
+
+def safe_std(values: List[float], ddof: int = 0) -> Optional[float]:
+    values = [float(v) for v in values if is_valid_number(v)]
+    if not values:
+        return None
+    if len(values) == 1:
+        return 0.0
+    return float(np.std(values, ddof=ddof))
+
+
+def safe_var(values: List[float], ddof: int = 0) -> Optional[float]:
+    values = [float(v) for v in values if is_valid_number(v)]
+    if not values:
+        return None
+    if len(values) == 1:
+        return 0.0
+    return float(np.var(values, ddof=ddof))
+
+
+def safe_percentile(values: List[float], q: float) -> Optional[float]:
+    values = [float(v) for v in values if is_valid_number(v)]
+    if not values:
+        return None
+    return float(np.percentile(values, q))
+
+
+def get_baseline_segment(
+    metrics: List[Dict],
+    baseline_fraction: float = 0.2,
+    min_points: int = 5
+) -> List[Dict]:
+    if not metrics:
+        return []
+
+    n = len(metrics)
+    cutoff = max(min_points, int(math.ceil(n * baseline_fraction)))
+    cutoff = min(cutoff, n)
+    return list(metrics.values())[:cutoff]
+    # return metrics[:cutoff]
+
+
+def estimate_indicator_thresholds(
+    metrics: List[Dict],
+    baseline_fraction: float = 0.2,
+    min_points: int = 5
+) -> Dict[str, Optional[float]]:
+
+    # 20% of runs or 5 runs - whichever is max
+    baseline = get_baseline_segment(metrics, baseline_fraction, min_points)
+
+
+    hci_vals = [row.get("HCI") for row in baseline if is_valid_number(row.get("HCI"))]
+    csm_vals = [row.get("CSM") for row in baseline if is_valid_number(row.get("CSM"))]
+    pbcc_vals = [row.get("PBCC") for row in baseline if is_valid_number(row.get("PBCC"))]
+
+    mu_hci = safe_mean(hci_vals)
+    sigma_hci = safe_std(hci_vals, ddof=0)
+
+    mu_pbcc = safe_mean(pbcc_vals)
+    sigma_pbcc = safe_std(pbcc_vals, ddof=0)
+
+    # as per 1.3 -> mu_hci + 2 sigma_hci
+
+    tau_hci = None if mu_hci is None or sigma_hci is None else mu_hci + 2 * sigma_hci
+    # as per 1.3 -> 90th percentile
+    tau_csm = safe_percentile(csm_vals, 90)
+    tau_tbs = 0.0
+    tau_pbcc = None if mu_pbcc is None or sigma_pbcc is None else mu_pbcc + 2 * sigma_pbcc
+
+    return {
+        "tau_HCI": tau_hci,
+        "tau_CSM": tau_csm,
+        "tau_TBS": tau_tbs,
+        "tau_PBCC": tau_pbcc,
+        "mu_HCI": mu_hci,
+        "sigma_HCI": sigma_hci,
+        "mu_PBCC": mu_pbcc,
+        "sigma_PBCC": sigma_pbcc,
+    }
