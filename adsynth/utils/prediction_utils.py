@@ -51,7 +51,9 @@ def estimate_indicator_thresholds(
     tau_hci = safe_percentile(hci_vals,95)
     # as per 1.3 -> 90th percentile
     tau_csm = safe_percentile(csm_vals, 90)
+    # tau_tbs = 0.0
     tau_tbs = safe_percentile(tbs_vals,90)
+
     tau_pbcc = None if mu_pbcc is None or sigma_pbcc is None else mu_pbcc + 2 * sigma_pbcc
 
     return {

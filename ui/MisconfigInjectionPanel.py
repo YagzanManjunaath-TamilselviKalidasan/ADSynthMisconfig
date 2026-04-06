@@ -18,13 +18,10 @@ class MisconfigInjectionPanel:
 
         self.frame = ttk.LabelFrame(parent, text="Misconfiguration Injection", padding=12)
 
-
-
         self._build_ui()
 
     def _build_ui(self):
         frame = ttk.Frame(self.frame, padding=16)
-
 
         frame.pack(fill="both", expand=True)
 
@@ -63,8 +60,6 @@ class MisconfigInjectionPanel:
             font=("Arial", 11, "bold")
         ).pack(anchor="w", pady=(16, 6))
 
-
-
         ttk.Checkbutton(frame, text="Session", variable=self.session_var).pack(anchor="w", pady=2)
         ttk.Checkbutton(frame, text="Individual Permission", variable=self.i_perm_var).pack(anchor="w", pady=2)
         ttk.Checkbutton(frame, text="Group Permission", variable=self.g_perm_var).pack(anchor="w", pady=2)
@@ -100,6 +95,7 @@ class MisconfigInjectionPanel:
             injections.append("nesting")
 
         return injections
+
     def _update_description(self):
         mode = self.schedule_type.get()
         self.description.delete("1.0", "end")
@@ -146,7 +142,7 @@ class MisconfigInjectionPanel:
             try:
                 if mode == "isolated":
                     if len(selected_injections) == 1:
-                        self.menu.run_injection_schedule(mode,selected_injections)
+                        self.menu.run_injection_schedule(mode, selected_injections)
                     else:
                         self.parent.after(
                             0,
@@ -155,7 +151,7 @@ class MisconfigInjectionPanel:
                         )
                 elif mode == "mixed":
                     if len(selected_injections) > 1:
-                        self.menu.run_injection_schedule(mode,selected_injections)
+                        self.menu.run_injection_schedule(mode, selected_injections)
                     else:
                         self.parent.after(
                             0,
@@ -163,18 +159,21 @@ class MisconfigInjectionPanel:
                                                          "Mixed mode can run multiple injection schedules\n Please select more than one schedule.")
                         )
                 elif mode == "sequence":
-                    self.menu.run_injection_schedule(mode,selected_injections)
+                    self.menu.run_injection_schedule(mode, selected_injections)
 
                 self.parent.after(
                     0,
                     lambda: messagebox.showinfo("Success", f"{mode.title()} injection schedule completed.")
                 )
 
+
             except Exception as e:
+
+                err_msg = str(e)
+
                 self.parent.after(
                     0,
-                    lambda: messagebox.showerror("Error", str(e))
+                    lambda: messagebox.showerror("Error", err_msg)
                 )
 
         threading.Thread(target=worker, daemon=True).start()
-

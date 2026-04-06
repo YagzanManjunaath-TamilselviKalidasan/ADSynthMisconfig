@@ -29,6 +29,7 @@ class ADSynthUI:
         self.db_pass_var = tk.StringVar(value="admin1234")
         self.domain_var = tk.StringVar(value=self.menu.domain)
         self.misconfig_var = tk.BooleanVar(value=True)
+        self.random_seed = tk.IntVar(value=1)
 
         self._build_ui()
 
@@ -61,6 +62,7 @@ class ADSynthUI:
         self._add_row(form, "Neo4j URL", self.db_url_var)
         self._add_row(form, "Neo4j Username", self.db_user_var)
         self._add_row(form, "Neo4j Password", self.db_pass_var, show="*")
+        self._add_row(form, "Random seed", self.random_seed)
 
         ttk.Checkbutton(
             left_panel,
@@ -119,6 +121,7 @@ class ADSynthUI:
         self.menu.domain = self.domain_var.get().strip().upper()
         self.menu.level = self.level_var.get().strip()
         self.menu.misconfig_enabled = self.misconfig_var.get()
+        self.menu.seed_number = self.random_seed.get()
 
     def test_connection(self):
         self._sync_to_menu()

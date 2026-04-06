@@ -85,7 +85,8 @@ import json
 from timeit import default_timer as timer
 from datetime import datetime
 
-from adsynth.utils.plot_utils import plot_plot_chart, plot_box_plot_using_plotty, plot_chart_using_plotly, plot_metrics
+from adsynth.utils.plot_utils import plot_plot_chart, plot_box_plot_using_plotty, plot_chart_using_plotly, plot_metrics, \
+    export_metrics_to_excel
 from adsynth.utils.prediction_utils import calc_thresholds_and_jump_labels
 
 
@@ -222,6 +223,7 @@ class MainMenu(cmd.Cmd):
     # In case of code modification or ideas related to fundamental concepts of Active Directory, clear references are mentioned at the top of such functions.
 
     def __init__(self):
+        self.seed_number = None
         self.skip_plots = True
         self.m = Messages()
         self.url = "bolt://localhost:7687"
@@ -244,7 +246,7 @@ class MainMenu(cmd.Cmd):
         self.dbname = None
         self.misconfig_enabled = True
         # R realizations - iterations as of now
-        self.R = 20
+        self.R = 1
         cmd.Cmd.__init__(self)
         logging.basicConfig(
             filename="app.log",
@@ -568,9 +570,14 @@ class MainMenu(cmd.Cmd):
 
     def generate_data(self):
         start_ = timer()
-        seed_number = get_single_int_param_value("seed", self.parameters)
-        if seed_number > 0:
-            random.seed(seed_number)
+        if self.seed_number is None:
+            seed_number = get_single_int_param_value("seed", self.parameters)
+            if seed_number > 0:
+                random.seed(seed_number)
+            self.seed_number = seed_number
+        else:
+            if  self.seed_number > 0:
+                random.seed(self.seed_number)
 
         # if not self.connected:
         #     print("Not connected to database. Use connect first")
@@ -1117,8 +1124,10 @@ class MainMenu(cmd.Cmd):
             # update_graph_db_with_temp_file(self.driver.session(), f"misconfig-session-temp={itr}")
             # tabulate_experiment_results(self.driver.session(),misconfig_growth_metrics)
             # if itr == 0 and not self.skip_plots:
-            if itr == self.R-1 :
-                plot_metrics(num_users, num_computers, num_misconfig, base_filename, misconfig_growth_metrics)
+
+            # Plotting in output excel
+            # if itr == self.R-1 :
+            #     plot_metrics(num_users, num_computers, num_misconfig, base_filename, misconfig_growth_metrics)
 
         mu = compute_mu(misconfig_metrics_per_itr, "X")
         logging.info("Mu :%s", mu)
@@ -1166,10 +1175,20 @@ class MainMenu(cmd.Cmd):
                     plot_type="line"
                 )
 
+
         save_all_experiment_states_to_json(
             f"/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/generated_datasets/experiment_session_{base_filename}.json",
         )
 
+        chart_metadata = {"Injection":"session","mode":"isolated","base":base_filename,"total_misconfigs":num_misconfig,"seed_number":self.seed_number,}
+
+        initial_misconfig = "Y" if self.misconfig_enabled else "N"
+
+        chart_metadata["initial_misconfig"] = initial_misconfig
+
+        xl_filename = f"analysis/misconfig_metrics_{base_filename}_{initial_misconfig}_{self.seed_number}.xlsx"
+
+        export_metrics_to_excel(misconfig_metrics_per_itr[0], xl_filename, x_axis="step",metadata=chart_metadata)
         with open(
                 f"/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/generated_datasets/mgm_session_{base_filename}.json",
                 "w") as f:
