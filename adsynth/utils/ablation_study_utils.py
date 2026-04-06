@@ -34,18 +34,46 @@ def populate_node_tiers():
 
 
 def get_baseline_from_AD(misconfig_type, TARGET_LABELS):
-    if misconfig_type == "session":
-        baseline_has_session = sum(1 for edge in EDGES if edge.get("label") == "HasSession")
-        return baseline_has_session
-    elif misconfig_type == "i_perm" or misconfig_type == "g_perm":
-        baseline_edges = [
-            edge for edge in EDGES
-            if edge.get("label") in TARGET_LABELS
-        ]
-        return len(baseline_edges)
-    elif misconfig_type == "nesting":
-        baseline_member_of = sum(1 for edge in EDGES if edge.get("label") == "MemberOf")
-        return baseline_member_of
+
+
+
+    # Modifying to choose all edges
+
+    CP = [
+        "AdminTo", "CanRDP", "CanPSRemote", "ExecuteDCOM",
+        "AllowedToDelegate", "ReadLAPSPassword", "SQLAdmin", "AllowedToAct"
+    ]
+
+    ACLS_LIST = [
+        "AllExtendedRights", "GenericAll", "GenericWrite", "WriteOwner",
+        "WriteDacl", "ForceChangePassword", "AddSelf", "AddMember"
+    ]
+
+    NON_ACLS_LIST = [
+        "CanRDP", "ExecuteDCOM", "AllowedToDelegate",
+        "ReadLAPSPassword", "CanPSRemote"
+    ]
+
+    ALL_INJECTION_LABELS = set(ACLS_LIST) | set(CP) | set(NON_ACLS_LIST) | {
+        "MemberOf",
+        "HasSession"
+    }
+    return sum(
+        1 for edge in EDGES
+        if edge.get("label") in ALL_INJECTION_LABELS
+    )
+    # if misconfig_type == "session":
+    #     baseline_has_session = sum(1 for edge in EDGES if edge.get("label") == "HasSession")
+    #     return baseline_has_session
+    # elif misconfig_type == "i_perm" or misconfig_type == "g_perm":
+    #     baseline_edges = [
+    #         edge for edge in EDGES
+    #         if edge.get("label") in TARGET_LABELS
+    #     ]
+    #     return len(baseline_edges)
+    # elif misconfig_type == "nesting":
+    #     baseline_member_of = sum(1 for edge in EDGES if edge.get("label") == "MemberOf")
+    #     return baseline_member_of
 
 
 def comp_tier_fn(node_name_or_id: str, labels=()) -> int:
