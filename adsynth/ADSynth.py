@@ -26,7 +26,7 @@ import numpy as np
 from tabulate import tabulate
 import pandas as pd
 from IPython.display import display
-
+import adsynth.DATABASE as DB
 from adsynth.EXPERIMENT_DATABASE import EXP_ADMIN_USERS, EXP_ENABLED_USERS, EXP_MISCONFIGURED_SESSION, EXP_LOCAL_ADMINS, \
     EXP_NODES, EXP_EDGES, EXP_MISCONFIGURED_GRP_PERMISSION, EXP_MISCONFIGURED_GRP_NESTING
 from adsynth.adsynth_templates.permissions import get_non_acls_list
@@ -65,8 +65,8 @@ from adsynth.templates.acls import get_acls_list
 from adsynth.templates.groups import get_departments_list
 from adsynth.utils.ablation_study_utils import get_baseline_from_AD, indicators_hci_csm_tbs, exposure_X, exposure_parts, \
     populate_node_tiers, pbcc_bounded_bfs_footholds, compute_mu, compute_sigma2, \
-    compute_mu_sigma_ci, compute_delta_X, find_p_star, compute_hub_correlation, pbcc_bounded_bfs_footholds_debug, \
-    exposure_users, exposure_computers
+    compute_mu_sigma_ci, compute_delta_X, find_p_max_delta, compute_hub_correlation, pbcc_bounded_bfs_footholds_debug, \
+    exposure_users, exposure_computers, pbcc_bounded_bfs_tier2_computers_debug
 from adsynth.utils.data import get_names_pool, get_surnames_pool, get_parameters_from_json, get_domains_pool
 from adsynth.utils.database_utils import init_experiment_state, restore_experiment_state, save_experiment_state, \
     clear_exp_neo4j_db, update_graph_db_with_temp_file, save_all_experiment_states_to_json, load_graph_from_file, \
@@ -89,7 +89,8 @@ from datetime import datetime
 from adsynth.utils.plot_utils import plot_plot_chart, plot_box_plot_using_plotty, plot_chart_using_plotly, plot_metrics, \
     export_metrics_to_excel
 from adsynth.utils.prediction_utils import calc_thresholds_and_jump_labels, add_high_exposure_label, \
-    misconfig_metrics_to_df, add_target_from_x, run_logreg_all_iterations_to_excel
+    misconfig_metrics_to_df, add_target_from_x, run_logreg_all_iterations_to_excel, \
+    calc_thresholds_and_jump_labels_for_iteration
 
 
 def delete_neo4j_data(session):
@@ -1036,7 +1037,8 @@ class MainMenu(cmd.Cmd):
         logging.info("Num of Users %s", num_users)
         logging.info("Num of Computers %s", num_computers)
 
-        N_baseline_session = get_baseline_from_AD("session", None)
+        # N_baseline_session = get_baseline_from_AD("session", None)
+        N_baseline_session = num_users
 
         # Assuming Max of 10% of misconfigurations for fine grained analysis
         max_perc_misconfig_sessions = 0.1
@@ -1076,61 +1078,72 @@ class MainMenu(cmd.Cmd):
                 misconfig_growth_metrics[misconfig_session_count]["X_comps"] = exposure_computers(
                     misconfig_growth_metrics[misconfig_session_count]["reachable_comps_count"],
                     num_computers)
-                indicators_hci_csm_tbs(EXP_EDGES, misconfig_growth_metrics, misconfig_session_count, {2}, 1.0)
-                pbcc_result = pbcc_bounded_bfs_footholds_debug(networkx_graph, WS_TIERS[2], high_value_target_name)
+
+                indicators_hci_csm_tbs(EXP_EDGES, misconfig_growth_metrics, misconfig_session_count, num_users,DB.TOTAL_T0_USERS,{2},
+                                       1.0)
+
+                pbcc_result = pbcc_bounded_bfs_tier2_computers_debug(
+                    networkx_graph,
+                    high_value_target_name,
+                    L=4,
+                )
 
                 print("PBCC:", pbcc_result["pbcc"])
                 print("Successful mixed paths:", pbcc_result["successful_paths"])
                 print("Path type counts:", pbcc_result["path_type_counts"])
 
-                for fh, info in pbcc_result["foothold_debug"].items():
-                    print(fh, "->", info["reason"], info["reached_target_by_type"])
+                # for fh, info in pbcc_result["foothold_debug"].items():
+                #     print(fh, "->", info["reason"], info["reached_target_by_type"])
 
-                misconfig_growth_metrics[misconfig_session_count]["pbcc"] = pbcc_result["pbcc"]
-
-                misconfig_growth_metrics = compute_delta_X(misconfig_growth_metrics)
-                p_star = find_p_star(misconfig_growth_metrics)
+                misconfig_growth_metrics[misconfig_session_count]["PBCC"] = pbcc_result["pbcc"]
 
                 # corr = np.corrcoef(HCI, deltaX)[0,1]
 
                 logging.info(
-                    "step=%d users=%d comps=%d p=%.6f X=%.4f delta_X=%.6f p_star=%.6f HCI=%.4f CSM=%.4f TBS=%.4f PBCC=%.4f",
+                    "step=%d users=%d comps=%d p=%.6f X=%.4f delta_X=%.6f HCI=%.4f CSM=%.4f TBS=%.4f PBCC=%.4f",
                     misconfig_session_count,
                     misconfig_growth_metrics[misconfig_session_count]["reachable_users_count"],
                     misconfig_growth_metrics[misconfig_session_count]["reachable_comps_count"],
                     misconfig_growth_metrics[misconfig_session_count]["p"],
                     misconfig_growth_metrics[misconfig_session_count]["X"],
                     misconfig_growth_metrics[misconfig_session_count].get("delta_X", 0.0),
-                    p_star,
                     misconfig_growth_metrics[misconfig_session_count]["HCI"],
                     misconfig_growth_metrics[misconfig_session_count]["CSM"],
                     misconfig_growth_metrics[misconfig_session_count]["TBS"],
-                    misconfig_growth_metrics[misconfig_session_count]["pbcc"]
+                    misconfig_growth_metrics[misconfig_session_count]["PBCC"]
                 )
+
             number_of_misconfigs = sorted(misconfig_growth_metrics.keys())
 
-            corr = compute_hub_correlation(misconfig_growth_metrics)
-            logging.info("corr(HCI, ΔX) = %.4f", corr)
 
-            HCI = []
-            deltaX = []
+            #
+            # HCI = []
+            # deltaX = []
+            #
+            # for m in misconfig_growth_metrics.values():
+            #     if "delta_X" in m:
+            #         HCI.append(m["HCI"])
+            #         deltaX.append(m["delta_X"])
+            #
+            # if itr == self.R - 1 and not self.skip_plots:
+            #     plot_plot_chart(
+            #         x_values=HCI,
+            #         y_values=deltaX,
+            #         x_label="HCI",
+            #         y_label="ΔX",
+            #         title="Hub Concurrency vs Exposure Jump",
+            #         additional_info={"itr": itr},
+            #         plot_type="scatter"
+            #     )
+            misconfig_growth_metrics = compute_delta_X(misconfig_growth_metrics)
 
-            for m in misconfig_growth_metrics.values():
-                if "delta_X" in m:
-                    HCI.append(m["HCI"])
-                    deltaX.append(m["delta_X"])
-
-            if itr == self.R - 1 and not self.skip_plots:
-                plot_plot_chart(
-                    x_values=HCI,
-                    y_values=deltaX,
-                    x_label="HCI",
-                    y_label="ΔX",
-                    title="Hub Concurrency vs Exposure Jump",
-                    additional_info={"itr": itr},
-                    plot_type="scatter"
-                )
-
+            metrics_with_jump_label, thresholds, datasets = calc_thresholds_and_jump_labels_for_iteration(
+                misconfig_growth_metrics,
+                itr=itr,
+                baseline_fraction=0.2,
+                min_points=5,
+            )
+            misconfig_growth_metrics = {row["step"]: row for row in metrics_with_jump_label}
             misconfig_metrics_per_itr[itr] = misconfig_growth_metrics
             save_experiment_state(itr)
             saveTofile(self, f"session-{itr}-{base_filename}.json")
@@ -1156,14 +1169,12 @@ class MainMenu(cmd.Cmd):
             p_star = max(sigma2, key=sigma2.get)
         logging.info("P* :%s", p_star)
 
+        # max_delta = find_p_max_delta(misconfig_growth_metrics)
+
         run_metrics = misconfig_metrics_per_itr[0]
 
         steps = sorted(run_metrics.keys())
 
-        X_values = [run_metrics[s]["X"] for s in steps]
-
-        ci = compute_mu_sigma_ci(X_values, 0.95)
-        logging.info("CI :%s", ci)
 
         logging.info("====================================================================")
 
@@ -1207,27 +1218,27 @@ class MainMenu(cmd.Cmd):
                 "w") as f:
             json.dump(misconfig_metrics_per_itr, f, indent=4)
 
-        calc_thresholds_and_jump_labels(misconfig_metrics_per_itr[0])
 
-        df_summary, df_coefs, df_coef_wide, df_skipped = run_logreg_all_iterations_to_excel(
-            misconfig_metrics_per_itr,
-            output_excel="analysis/logreg_all_iterations.xlsx",
-            feature_cols=["HCI", "CSM", "TBS"],
-            x_col="X",
-            quantile=0.8,
-        )
-
-        df_summary, df_coefs, df_coef_wide, df_skipped = run_logreg_all_iterations_to_excel(
-            misconfig_metrics_per_itr,
-            output_excel="analysis/logreg_all_iterations_rise.xlsx",
-            feature_cols=[
-                "HCI", "CSM", "TBS",
-                "delta_HCI", "delta_CSM", "delta_TBS",
-                "rise_streak_HCI", "rise_streak_CSM", "rise_streak_TBS",
-            ],
-            x_col="X",
-            quantile=0.8,
-        )
+# Skipping log reg
+#         df_summary, df_coefs, df_coef_wide, df_skipped = run_logreg_all_iterations_to_excel(
+#             misconfig_metrics_per_itr,
+#             output_excel="analysis/logreg_all_iterations.xlsx",
+#             feature_cols=["HCI", "CSM", "TBS"],
+#             x_col="X",
+#             quantile=0.8,
+#         )
+#
+#         df_summary, df_coefs, df_coef_wide, df_skipped = run_logreg_all_iterations_to_excel(
+#             misconfig_metrics_per_itr,
+#             output_excel="analysis/logreg_all_iterations_rise.xlsx",
+#             feature_cols=[
+#                 "HCI", "CSM", "TBS",
+#                 "delta_HCI", "delta_CSM", "delta_TBS",
+#                 "rise_streak_HCI", "rise_streak_CSM", "rise_streak_TBS",
+#             ],
+#             x_col="X",
+#             quantile=0.8,
+#         )
 
     def indi_permission_injection(self, args):
         if len(NODES) == 0:
@@ -1307,7 +1318,7 @@ class MainMenu(cmd.Cmd):
                 misconfig_growth_metrics[misconfig_indi_permission_count]["pbcc"] = pbcc_result["pbcc"]
 
                 misconfig_growth_metrics = compute_delta_X(misconfig_growth_metrics)
-                p_star = find_p_star(misconfig_growth_metrics)
+                p_star = find_p_max_delta(misconfig_growth_metrics)
 
                 # corr = np.corrcoef(HCI, deltaX)[0,1]
 
@@ -1323,7 +1334,7 @@ class MainMenu(cmd.Cmd):
                     misconfig_growth_metrics[misconfig_indi_permission_count]["HCI"],
                     misconfig_growth_metrics[misconfig_indi_permission_count]["CSM"],
                     misconfig_growth_metrics[misconfig_indi_permission_count]["TBS"],
-                    misconfig_growth_metrics[misconfig_indi_permission_count]["pbcc"]
+                    misconfig_growth_metrics[misconfig_indi_permission_count]["PBCC"]
                 )
             number_of_misconfigs = sorted(misconfig_growth_metrics.keys())
 
@@ -1500,7 +1511,7 @@ class MainMenu(cmd.Cmd):
                 misconfig_growth_metrics[misconfig_grp_permission_count]["pbcc"] = pbcc_result["pbcc"]
 
                 misconfig_growth_metrics = compute_delta_X(misconfig_growth_metrics)
-                p_star = find_p_star(misconfig_growth_metrics)
+                p_star = find_p_max_delta(misconfig_growth_metrics)
 
                 # corr = np.corrcoef(HCI, deltaX)[0,1]
 
@@ -1670,7 +1681,7 @@ class MainMenu(cmd.Cmd):
                 misconfig_growth_metrics[misconfig_grp_nesting_count]["pbcc"] = pbcc_result["pbcc"]
 
                 misconfig_growth_metrics = compute_delta_X(misconfig_growth_metrics)
-                p_star = find_p_star(misconfig_growth_metrics)
+                p_star = find_p_max_delta(misconfig_growth_metrics)
 
                 # corr = np.corrcoef(HCI, deltaX)[0,1]
 
