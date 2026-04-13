@@ -65,7 +65,8 @@ from adsynth.templates.acls import get_acls_list
 from adsynth.templates.groups import get_departments_list
 from adsynth.utils.ablation_study_utils import get_baseline_from_AD, indicators_hci_csm_tbs, exposure_X, exposure_parts, \
     populate_node_tiers, pbcc_bounded_bfs_footholds, compute_mu, compute_sigma2, \
-    compute_mu_sigma_ci, compute_delta_X, find_p_star, compute_hub_correlation
+    compute_mu_sigma_ci, compute_delta_X, find_p_star, compute_hub_correlation, pbcc_bounded_bfs_footholds_debug, \
+    exposure_users, exposure_computers
 from adsynth.utils.data import get_names_pool, get_surnames_pool, get_parameters_from_json, get_domains_pool
 from adsynth.utils.database_utils import init_experiment_state, restore_experiment_state, save_experiment_state, \
     clear_exp_neo4j_db, update_graph_db_with_temp_file, save_all_experiment_states_to_json, load_graph_from_file, \
@@ -87,7 +88,8 @@ from datetime import datetime
 
 from adsynth.utils.plot_utils import plot_plot_chart, plot_box_plot_using_plotty, plot_chart_using_plotly, plot_metrics, \
     export_metrics_to_excel
-from adsynth.utils.prediction_utils import calc_thresholds_and_jump_labels
+from adsynth.utils.prediction_utils import calc_thresholds_and_jump_labels, add_high_exposure_label, \
+    misconfig_metrics_to_df, add_target_from_x, run_logreg_all_iterations_to_excel
 
 
 def delete_neo4j_data(session):
@@ -246,7 +248,7 @@ class MainMenu(cmd.Cmd):
         self.dbname = None
         self.misconfig_enabled = True
         # R realizations - iterations as of now
-        self.R = 1
+        self.R = 10
         cmd.Cmd.__init__(self)
         logging.basicConfig(
             filename="app.log",
@@ -576,7 +578,7 @@ class MainMenu(cmd.Cmd):
                 random.seed(seed_number)
             self.seed_number = seed_number
         else:
-            if  self.seed_number > 0:
+            if self.seed_number > 0:
                 random.seed(self.seed_number)
 
         # if not self.connected:
@@ -1020,8 +1022,6 @@ class MainMenu(cmd.Cmd):
         elif injection_type == "nesting":
             self.grp_nesting_injection(mode)
 
-
-
     def session_injection(self, args):
         if len(NODES) == 0:
             print("====================================================================")
@@ -1036,7 +1036,7 @@ class MainMenu(cmd.Cmd):
         logging.info("Num of Users %s", num_users)
         logging.info("Num of Computers %s", num_computers)
 
-        N_baseline_session = get_baseline_from_AD("session",None)
+        N_baseline_session = get_baseline_from_AD("session", None)
 
         # Assuming Max of 10% of misconfigurations for fine grained analysis
         max_perc_misconfig_sessions = 0.1
@@ -1070,8 +1070,22 @@ class MainMenu(cmd.Cmd):
                     misconfig_growth_metrics[misconfig_session_count]["reachable_users_count"],
                     misconfig_growth_metrics[misconfig_session_count]["reachable_comps_count"], num_users,
                     num_computers)
+
+                misconfig_growth_metrics[misconfig_session_count]["X_users"] = exposure_users(
+                    misconfig_growth_metrics[misconfig_session_count]["reachable_users_count"], num_users)
+                misconfig_growth_metrics[misconfig_session_count]["X_comps"] = exposure_computers(
+                    misconfig_growth_metrics[misconfig_session_count]["reachable_comps_count"],
+                    num_computers)
                 indicators_hci_csm_tbs(EXP_EDGES, misconfig_growth_metrics, misconfig_session_count, {2}, 1.0)
-                pbcc_result = pbcc_bounded_bfs_footholds(networkx_graph, WS_TIERS[2], high_value_target_name)
+                pbcc_result = pbcc_bounded_bfs_footholds_debug(networkx_graph, WS_TIERS[2], high_value_target_name)
+
+                print("PBCC:", pbcc_result["pbcc"])
+                print("Successful mixed paths:", pbcc_result["successful_paths"])
+                print("Path type counts:", pbcc_result["path_type_counts"])
+
+                for fh, info in pbcc_result["foothold_debug"].items():
+                    print(fh, "->", info["reason"], info["reached_target_by_type"])
+
                 misconfig_growth_metrics[misconfig_session_count]["pbcc"] = pbcc_result["pbcc"]
 
                 misconfig_growth_metrics = compute_delta_X(misconfig_growth_metrics)
@@ -1113,7 +1127,7 @@ class MainMenu(cmd.Cmd):
                     x_label="HCI",
                     y_label="ΔX",
                     title="Hub Concurrency vs Exposure Jump",
-                    additional_info={"itr":itr},
+                    additional_info={"itr": itr},
                     plot_type="scatter"
                 )
 
@@ -1144,7 +1158,6 @@ class MainMenu(cmd.Cmd):
 
         run_metrics = misconfig_metrics_per_itr[0]
 
-
         steps = sorted(run_metrics.keys())
 
         X_values = [run_metrics[s]["X"] for s in steps]
@@ -1154,33 +1167,33 @@ class MainMenu(cmd.Cmd):
 
         logging.info("====================================================================")
 
-        if not self.skip_plots :
-                plot_plot_chart(
-                    x_values=list(mu.keys()),
-                    y_values=list(mu.values()),
-                    x_label="p",
-                    y_label="μ(p)",
-                    title="Mean Exposure vs Misconfiguration Level",
-                    additional_info={"R": self.R},
-                    plot_type="line"
-                )
+        if not self.skip_plots:
+            plot_plot_chart(
+                x_values=list(mu.keys()),
+                y_values=list(mu.values()),
+                x_label="p",
+                y_label="μ(p)",
+                title="Mean Exposure vs Misconfiguration Level",
+                additional_info={"R": self.R},
+                plot_type="line"
+            )
 
-                plot_plot_chart(
-                    x_values=list(sigma2.keys()),
-                    y_values=list(sigma2.values()),
-                    x_label="p",
-                    y_label="σ²(p)",
-                    title="Exposure Variance vs Misconfiguration Level",
-                    additional_info={"R": self.R},
-                    plot_type="line"
-                )
-
+            plot_plot_chart(
+                x_values=list(sigma2.keys()),
+                y_values=list(sigma2.values()),
+                x_label="p",
+                y_label="σ²(p)",
+                title="Exposure Variance vs Misconfiguration Level",
+                additional_info={"R": self.R},
+                plot_type="line"
+            )
 
         save_all_experiment_states_to_json(
             f"/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/generated_datasets/experiment_session_{base_filename}.json",
         )
 
-        chart_metadata = {"Injection":"session","mode":"isolated","base":base_filename,"total_misconfigs":num_misconfig,"seed_number":self.seed_number,}
+        chart_metadata = {"Injection": "session", "mode": "isolated", "base": base_filename,
+                          "total_misconfigs": num_misconfig, "seed_number": self.seed_number, }
 
         initial_misconfig = "Y" if self.misconfig_enabled else "N"
 
@@ -1188,13 +1201,33 @@ class MainMenu(cmd.Cmd):
 
         xl_filename = f"analysis/misconfig_metrics_{base_filename}_{initial_misconfig}_{self.seed_number}.xlsx"
 
-        export_metrics_to_excel(misconfig_metrics_per_itr[0], xl_filename, x_axis="step",metadata=chart_metadata)
+        export_metrics_to_excel(misconfig_metrics_per_itr[0], xl_filename, x_axis="step", metadata=chart_metadata)
         with open(
                 f"/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/generated_datasets/mgm_session_{base_filename}.json",
                 "w") as f:
             json.dump(misconfig_metrics_per_itr, f, indent=4)
 
         calc_thresholds_and_jump_labels(misconfig_metrics_per_itr[0])
+
+        df_summary, df_coefs, df_coef_wide, df_skipped = run_logreg_all_iterations_to_excel(
+            misconfig_metrics_per_itr,
+            output_excel="analysis/logreg_all_iterations.xlsx",
+            feature_cols=["HCI", "CSM", "TBS"],
+            x_col="X",
+            quantile=0.8,
+        )
+
+        df_summary, df_coefs, df_coef_wide, df_skipped = run_logreg_all_iterations_to_excel(
+            misconfig_metrics_per_itr,
+            output_excel="analysis/logreg_all_iterations_rise.xlsx",
+            feature_cols=[
+                "HCI", "CSM", "TBS",
+                "delta_HCI", "delta_CSM", "delta_TBS",
+                "rise_streak_HCI", "rise_streak_CSM", "rise_streak_TBS",
+            ],
+            x_col="X",
+            quantile=0.8,
+        )
 
     def indi_permission_injection(self, args):
         if len(NODES) == 0:
@@ -1347,26 +1380,26 @@ class MainMenu(cmd.Cmd):
         logging.info("CI :%s", ci)
 
         logging.info("====================================================================")
-        if not self.skip_plots :
-                plot_plot_chart(
-                    x_values=list(mu.keys()),
-                    y_values=list(mu.values()),
-                    x_label="p",
-                    y_label="μ(p)",
-                    title="Mean Exposure vs Misconfiguration Level  (i_perm)",
-                    additional_info={"R": self.R},
-                    plot_type="line"
-                )
+        if not self.skip_plots:
+            plot_plot_chart(
+                x_values=list(mu.keys()),
+                y_values=list(mu.values()),
+                x_label="p",
+                y_label="μ(p)",
+                title="Mean Exposure vs Misconfiguration Level  (i_perm)",
+                additional_info={"R": self.R},
+                plot_type="line"
+            )
 
-                plot_plot_chart(
-                    x_values=list(sigma2.keys()),
-                    y_values=list(sigma2.values()),
-                    x_label="p",
-                    y_label="σ²(p)",
-                    title="Exposure Variance vs Misconfiguration Level (i_perm)",
-                    additional_info={"R": self.R},
-                    plot_type="line"
-                )
+            plot_plot_chart(
+                x_values=list(sigma2.keys()),
+                y_values=list(sigma2.values()),
+                x_label="p",
+                y_label="σ²(p)",
+                title="Exposure Variance vs Misconfiguration Level (i_perm)",
+                additional_info={"R": self.R},
+                plot_type="line"
+            )
 
         save_all_experiment_states_to_json(
             f"/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/generated_datasets/experiment_i_perm_{base_filename}.json",
@@ -1541,25 +1574,25 @@ class MainMenu(cmd.Cmd):
 
         logging.info("====================================================================")
         if not self.skip_plots:
-                plot_plot_chart(
-                    x_values=list(mu.keys()),
-                    y_values=list(mu.values()),
-                    x_label="p",
-                    y_label="μ(p)",
-                    title="Mean Exposure vs Misconfiguration Level  (g_perm)",
-                    additional_info={"R": self.R},
-                    plot_type="line"
-                )
+            plot_plot_chart(
+                x_values=list(mu.keys()),
+                y_values=list(mu.values()),
+                x_label="p",
+                y_label="μ(p)",
+                title="Mean Exposure vs Misconfiguration Level  (g_perm)",
+                additional_info={"R": self.R},
+                plot_type="line"
+            )
 
-                plot_plot_chart(
-                    x_values=list(sigma2.keys()),
-                    y_values=list(sigma2.values()),
-                    x_label="p",
-                    y_label="σ²(p)",
-                    title="Exposure Variance vs Misconfiguration Level (g_perm)",
-                    additional_info={"R": self.R},
-                    plot_type="line"
-                )
+            plot_plot_chart(
+                x_values=list(sigma2.keys()),
+                y_values=list(sigma2.values()),
+                x_label="p",
+                y_label="σ²(p)",
+                title="Exposure Variance vs Misconfiguration Level (g_perm)",
+                additional_info={"R": self.R},
+                plot_type="line"
+            )
 
         save_all_experiment_states_to_json(
             f"/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/generated_datasets/experiment_g_perm_{base_filename}.json",
@@ -1569,7 +1602,6 @@ class MainMenu(cmd.Cmd):
                 f"/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/generated_datasets/mgm_g_perm_{base_filename}.json",
                 "w") as f:
             json.dump(misconfig_metrics_per_itr, f, indent=4)
-
 
     def grp_nesting_injection(self, args):
         if len(NODES) == 0:

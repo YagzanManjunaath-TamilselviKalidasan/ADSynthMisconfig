@@ -292,3 +292,227 @@ def export_metrics_to_csv(metrics, filename):
     df.to_csv(filename, index=False)
 
     print(f"Dataset exported to {filename}")
+
+
+
+def add_high_exposure_label(df, exposure_col="X", quantile=0.8):
+    df = df.copy()
+    threshold = df[exposure_col].quantile(quantile)
+    df["high_exposure_label"] = (df[exposure_col] >= threshold).astype(int)
+    return df, threshold
+
+import pandas as pd
+from sklearn.model_selection import train_test_split
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import (
+    accuracy_score,
+    precision_score,
+    recall_score,
+    f1_score,
+    roc_auc_score,
+)
+
+def misconfig_metrics_to_df(misconfig_metrics_per_itr):
+    rows = []
+
+    if isinstance(misconfig_metrics_per_itr, dict):
+        first_val = next(iter(misconfig_metrics_per_itr.values()), None)
+
+        # case 1: step -> row
+        if isinstance(first_val, dict) and (
+            "HCI" in first_val or "CSM" in first_val or "TBS" in first_val
+        ):
+            for step, row in misconfig_metrics_per_itr.items():
+                r = dict(row)
+                r["run"] = 0
+                r["step"] = step
+                rows.append(r)
+
+        # case 2: run -> step -> row
+        else:
+            for run_id, step_dict in misconfig_metrics_per_itr.items():
+                if not isinstance(step_dict, dict):
+                    continue
+                for step, row in step_dict.items():
+                    r = dict(row)
+                    r["run"] = run_id
+                    r["step"] = step
+                    rows.append(r)
+
+    elif isinstance(misconfig_metrics_per_itr, list):
+        for step, row in enumerate(misconfig_metrics_per_itr, start=1):
+            r = dict(row)
+            r["run"] = 0
+            r["step"] = step
+            rows.append(r)
+    else:
+        raise TypeError("Unsupported type for misconfig_metrics_per_itr")
+
+    df = pd.DataFrame(rows)
+    if not df.empty:
+        df = df.sort_values(["run", "step"]).reset_index(drop=True)
+    return df
+
+
+def add_target_from_x(df, x_col="X", quantile=0.8):
+    df = df.copy()
+    threshold = df[x_col].quantile(quantile)
+    df["high_exposure_label"] = (df[x_col] >= threshold).astype(int)
+    return df, threshold
+
+
+def run_logreg_df(df, target_col="high_exposure_label", feature_cols=None):
+    if feature_cols is None:
+        feature_cols = ["HCI", "CSM", "TBS"]
+
+    needed = feature_cols + [target_col]
+    missing = [c for c in needed if c not in df.columns]
+    if missing:
+        raise ValueError(f"Missing required columns: {missing}")
+
+    data = df[needed].dropna().copy()
+    X = data[feature_cols]
+    y = data[target_col].astype(int)
+
+    if len(data) < 4:
+        raise ValueError("Not enough rows after dropna()")
+
+    if y.nunique() < 2:
+        raise ValueError(f"Target column '{target_col}' has only one class")
+
+    # Produces overfit data
+    X_train, X_test, y_train, y_test = train_test_split(
+        X,
+        y,
+        test_size=0.3,
+        random_state=42,
+        stratify=y,
+    )
+
+    # split_idx = int(len(data) * 0.7)
+    # train_df = data.iloc[:split_idx]
+    # test_df = data.iloc[split_idx:]
+    # X_train = train_df[feature_cols]
+    # y_train = train_df[target_col].astype(int)
+    #
+    # X_test = test_df[feature_cols]
+    # y_test = test_df[target_col].astype(int)
+
+    model = Pipeline([
+        ("scaler", StandardScaler()),
+        ("clf", LogisticRegression(max_iter=2000, class_weight="balanced"))
+    ])
+
+    model.fit(X_train, y_train)
+
+    y_pred = model.predict(X_test)
+    y_prob = model.predict_proba(X_test)[:, 1]
+
+    results = {
+        "n_rows_used": len(data),
+        "class_0": int((y == 0).sum()),
+        "class_1": int((y == 1).sum()),
+        "accuracy": accuracy_score(y_test, y_pred),
+        "precision": precision_score(y_test, y_pred, zero_division=0),
+        "recall": recall_score(y_test, y_pred, zero_division=0),
+        "f1": f1_score(y_test, y_pred, zero_division=0),
+        "roc_auc": roc_auc_score(y_test, y_prob),
+    }
+
+    clf = model.named_steps["clf"]
+    coef_df = pd.DataFrame({
+        "feature": feature_cols,
+        "coefficient": clf.coef_[0]
+    }).sort_values("coefficient", ascending=False)
+
+    return model, results, coef_df
+
+
+def run_logreg_all_iterations_to_excel(
+    misconfig_metrics_per_itr,
+    output_excel="logreg_all_iterations.xlsx",
+    feature_cols=None,
+    x_col="X",
+    quantile=0.8,
+):
+    if feature_cols is None:
+        feature_cols = ["HCI", "CSM", "TBS"]
+
+    summary_rows = []
+    coef_rows = []
+    skipped_rows = []
+
+    for i in range(len(misconfig_metrics_per_itr)):
+        try:
+            df_all = misconfig_metrics_to_df(misconfig_metrics_per_itr[i])
+
+            if df_all.empty:
+                skipped_rows.append({
+                    "iteration": i,
+                    "reason": "empty dataframe"
+                })
+                continue
+
+            if x_col not in df_all.columns:
+                skipped_rows.append({
+                    "iteration": i,
+                    "reason": f"missing {x_col}"
+                })
+                continue
+
+            df_all, thr = add_target_from_x(df_all, x_col=x_col, quantile=quantile)
+
+            model, results, coef_df = run_logreg_df(
+                df_all,
+                target_col="high_exposure_label",
+                feature_cols=feature_cols
+            )
+
+            summary_rows.append({
+                "iteration": i,
+                "x_threshold": thr,
+                **results
+            })
+
+            coef_df = coef_df.copy()
+            coef_df["iteration"] = i
+            coef_df["x_threshold"] = thr
+            coef_rows.append(coef_df)
+
+        except Exception as e:
+            skipped_rows.append({
+                "iteration": i,
+                "reason": str(e)
+            })
+
+    df_summary = pd.DataFrame(summary_rows)
+    df_coefs = pd.concat(coef_rows, ignore_index=True) if coef_rows else pd.DataFrame()
+    df_skipped = pd.DataFrame(skipped_rows)
+
+    # wide coefficient table: one row per iteration
+    if not df_coefs.empty:
+        df_coef_wide = (
+            df_coefs.pivot(index="iteration", columns="feature", values="coefficient")
+            .reset_index()
+        )
+        df_coef_wide.columns.name = None
+    else:
+        df_coef_wide = pd.DataFrame()
+
+    with pd.ExcelWriter(output_excel, engine="xlsxwriter") as writer:
+        if not df_summary.empty:
+            df_summary.to_excel(writer, sheet_name="summary", index=False)
+
+        if not df_coefs.empty:
+            df_coefs.to_excel(writer, sheet_name="coefficients_long", index=False)
+
+        if not df_coef_wide.empty:
+            df_coef_wide.to_excel(writer, sheet_name="coefficients_wide", index=False)
+
+        if not df_skipped.empty:
+            df_skipped.to_excel(writer, sheet_name="skipped", index=False)
+
+    print(f"Saved logistic regression results to: {output_excel}")
+    return df_summary, df_coefs, df_coef_wide, df_skipped

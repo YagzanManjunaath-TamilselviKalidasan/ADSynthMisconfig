@@ -7,6 +7,8 @@ import plotly.graph_objects as go
 import plotly.io as pio
 import numpy as np
 
+from adsynth.utils.ablation_study_utils import add_rise_period_metrics
+
 
 def plot_plot_chart(x_values, y_values, x_label, y_label, title, additional_info, plot_type):
     plt.figure(figsize=(8, 5))
@@ -257,6 +259,19 @@ def plot_box_plot_using_plotty(
     # fig.show()
 
 
+def minmax_normalize_series(series):
+    s = pd.to_numeric(series, errors="coerce")
+    if s.dropna().empty:
+        return s
+    s_min = s.min()
+    s_max = s.max()
+    if pd.isna(s_min) or pd.isna(s_max):
+        return s
+    if math.isclose(s_min, s_max):
+        return pd.Series([0.0] * len(s), index=s.index)
+    return (s - s_min) / (s_max - s_min)
+
+
 def plot_metrics(num_users, num_computers, num_misconfig, base_filename, misconfig_growth_metrics):
     steps = sorted(misconfig_growth_metrics.keys())
 
@@ -363,7 +378,23 @@ import numbers
 
 import pandas as pd
 
-def export_metrics_to_excel(metrics_data, filename, x_axis="step",metadata=None):
+import math
+import tempfile
+from collections import defaultdict
+
+import pandas as pd
+import matplotlib.pyplot as plt
+
+
+import math
+import tempfile
+from collections import defaultdict
+
+import pandas as pd
+import matplotlib.pyplot as plt
+
+
+def export_metrics_to_excel(metrics_data, filename, x_axis="step", metadata=None):
     metric_titles = {
         "X": "Exposure X(p)",
         "HCI": "HCI",
@@ -377,8 +408,43 @@ def export_metrics_to_excel(metrics_data, filename, x_axis="step",metadata=None)
         "new_reachable_users",
         "reachable_comps",
         "new_reachable_comps_names",
-        "reachable_comps_names"
+        "reachable_comps_names",
     ]
+
+    rise_metric_keys = ["HCI", "CSM", "TBS"]
+
+    # --------------------------------------------------
+    # Helpers
+    # --------------------------------------------------
+    def safe_sheet_name(name):
+        invalid = ['[', ']', ':', '*', '?', '/', '\\']
+        for ch in invalid:
+            name = name.replace(ch, "_")
+        return name[:31]
+
+    def write_dataframe(ws, df, header_fmt):
+        for col_num, value in enumerate(df.columns):
+            ws.write(0, col_num, value, header_fmt)
+            width = max(16, len(str(value)) + 2)
+            ws.set_column(col_num, col_num, width)
+
+    def build_chart_title(main_title, metadata=None):
+        if not metadata:
+            return main_title
+        meta_parts = [f"{k}: {v}" for k, v in metadata.items()]
+        return f"{main_title}\n" + " | ".join(meta_parts)
+
+    def minmax_normalize_series(series):
+        s = pd.to_numeric(series, errors="coerce")
+        if s.dropna().empty:
+            return s
+        s_min = s.min()
+        s_max = s.max()
+        if pd.isna(s_min) or pd.isna(s_max):
+            return s
+        if math.isclose(s_min, s_max):
+            return pd.Series([0.0] * len(s), index=s.index)
+        return (s - s_min) / (s_max - s_min)
 
     def normalize_metrics(metrics_data):
         """
@@ -402,15 +468,12 @@ def export_metrics_to_excel(metrics_data, filename, x_axis="step",metadata=None)
 
             first_val = next(iter(metrics_data.values()))
 
-
             if isinstance(first_val, dict) and ("X" in first_val or "HCI" in first_val):
                 for step, row in metrics_data.items():
                     new_row = dict(row)
                     new_row["run"] = 0
                     new_row["step"] = step
                     rows.append(new_row)
-
-
             else:
                 for run_id, step_dict in metrics_data.items():
                     if not isinstance(step_dict, dict):
@@ -428,273 +491,540 @@ def export_metrics_to_excel(metrics_data, filename, x_axis="step",metadata=None)
             df = df.sort_values(["run", "step"]).reset_index(drop=True)
         return df
 
-    def write_dataframe(ws, df, header_fmt):
-        for col_num, value in enumerate(df.columns):
-            ws.write(0, col_num, value, header_fmt)
-            ws.set_column(col_num, col_num, max(16, len(str(value)) + 2))
-
-    def safe_sheet_name(name):
-        invalid = ['[', ']', ':', '*', '?', '/', '\\']
-        for ch in invalid:
-            name = name.replace(ch, "_")
-        return name[:31]
-
-    def insert_boxplot_image(workbook, worksheet, df, metric_key, metric_label, cell):
-        values = df[metric_key].dropna().tolist()
-        if not values:
-            return
-
-        fig, ax = plt.subplots(figsize=(6, 4))
-        ax.boxplot(values, vert=True)
-        ax.set_title(metric_label)
-        ax.set_ylabel(metric_label)
-
-        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
-        tmp_path = tmp.name
-        tmp.close()
-
-        fig.savefig(tmp_path, bbox_inches="tight")
-        plt.close(fig)
-
-        worksheet.insert_image(cell, tmp_path)
-
-        return tmp_path
-
-    def add_deltas_for_all_metrics(metrics_dict, metric_titles,scale = True):
+    def add_deltas_and_scaled(metrics_dict, metric_keys):
         steps = sorted(metrics_dict.keys())
         prev_row = None
 
         for step in steps:
             row = metrics_dict[step]
-
-            for metric_key in metric_titles.keys():
+            for metric_key in metric_keys:
                 curr_val = row.get(metric_key, 0)
 
                 if prev_row is None:
                     row[f"delta_{metric_key}"] = 0
                 else:
                     prev_val = prev_row.get(metric_key, 0)
-
                     if isinstance(curr_val, (int, float)) and isinstance(prev_val, (int, float)):
                         row[f"delta_{metric_key}"] = curr_val - prev_val
                     else:
                         row[f"delta_{metric_key}"] = None
-
             prev_row = row
-        if scale:
-            all_keys = list(metric_titles.keys()) + [f"delta_{k}" for k in metric_titles.keys()]
 
-            for key in all_keys:
-                values = [
-                    metrics_dict[s].get(key)
-                    for s in steps
-                    if isinstance(metrics_dict[s].get(key), (int, float))
-                ]
+        all_keys = list(metric_keys) + [f"delta_{k}" for k in metric_keys]
 
-                if not values:
-                    continue
+        for key in all_keys:
+            values = [
+                metrics_dict[s].get(key)
+                for s in steps
+                if isinstance(metrics_dict[s].get(key), (int, float))
+            ]
+            if not values:
+                continue
 
-                min_val = min(values)
-                max_val = max(values)
+            min_val = min(values)
+            max_val = max(values)
 
-
-                if math.isclose(max_val, min_val):
-                    for s in steps:
-                        metrics_dict[s][f"scaled_{key}"] = 0.0
-                    continue
-
+            if math.isclose(min_val, max_val):
                 for s in steps:
-                    val = metrics_dict[s].get(key)
+                    metrics_dict[s][f"scaled_{key}"] = 0.0
+                continue
 
-                    if isinstance(val, (int, float)):
-                        scaled = (val - min_val) / (max_val - min_val)
-                        metrics_dict[s][f"scaled_{key}"] = scaled
-                    else:
-                        metrics_dict[s][f"scaled_{key}"] = None
+            for s in steps:
+                val = metrics_dict[s].get(key)
+                if isinstance(val, (int, float)):
+                    metrics_dict[s][f"scaled_{key}"] = (val - min_val) / (max_val - min_val)
+                else:
+                    metrics_dict[s][f"scaled_{key}"] = None
+
         return metrics_dict
-    def build_chart_title(main_title, metadata=None):
-        if not metadata:
-            return main_title
 
-        meta_parts = [f"{k}: {v}" for k, v in list(metadata.items())]
-        meta_text = " | ".join(meta_parts)
-        return f"{main_title}\n{meta_text}"
+    def add_rise_period_metrics(metrics_dict, metric_keys):
+        steps = sorted(metrics_dict.keys())
+        streaks = {k: 0 for k in metric_keys}
+        totals = {k: 0 for k in metric_keys}
+        prev_vals = {k: None for k in metric_keys}
 
-    metrics_to_export = add_deltas_for_all_metrics(metrics_data, metric_titles,True)
+        for step in steps:
+            row = metrics_dict[step]
+
+            for k in metric_keys:
+                curr = row.get(k)
+
+                if not isinstance(curr, (int, float)):
+                    row[f"rise_flag_{k}"] = None
+                    row[f"rise_streak_{k}"] = None
+                    row[f"rise_total_{k}"] = totals[k]
+                    continue
+
+                prev = prev_vals[k]
+
+                if isinstance(prev, (int, float)) and curr > prev:
+                    streaks[k] += 1
+                    totals[k] += 1
+                    row[f"rise_flag_{k}"] = 1
+                else:
+                    streaks[k] = 0
+                    row[f"rise_flag_{k}"] = 0
+
+                row[f"rise_streak_{k}"] = streaks[k]
+                row[f"rise_total_{k}"] = totals[k]
+                prev_vals[k] = curr
+
+        return metrics_dict
+
+    def add_run_level_deltas(df):
+        if "reachable_users_count" in df.columns:
+            df["delta_reachable_users_count"] = (
+                df.groupby("run")["reachable_users_count"]
+                .diff()
+                .fillna(df["reachable_users_count"])
+            )
+
+        if "reachable_comps_count" in df.columns:
+            df["delta_reachable_comps_count"] = (
+                df.groupby("run")["reachable_comps_count"]
+                .diff()
+                .fillna(df["reachable_comps_count"])
+            )
+        return df
+
+    def insert_correlation_heatmap(worksheet, df, cell="J2", title="Correlation Heatmap"):
+        numeric_df = df.select_dtypes(include=["number"]).copy()
+        if numeric_df.empty or numeric_df.shape[1] < 2:
+            return
+
+        corr = numeric_df.corr(method="pearson")
+
+        fig, ax = plt.subplots(figsize=(10, 8))
+        im = ax.imshow(corr.values, aspect="auto", interpolation="nearest")
+        ax.set_xticks(range(len(corr.columns)))
+        ax.set_xticklabels(corr.columns, rotation=90)
+        ax.set_yticks(range(len(corr.index)))
+        ax.set_yticklabels(corr.index)
+        ax.set_title(title)
+
+        for i in range(len(corr.index)):
+            for j in range(len(corr.columns)):
+                ax.text(j, i, f"{corr.iloc[i, j]:.2f}", ha="center", va="center", fontsize=8)
+
+        fig.colorbar(im, ax=ax)
+        fig.tight_layout()
+
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+        tmp_path = tmp.name
+        tmp.close()
+
+        fig.savefig(tmp_path, bbox_inches="tight", dpi=180)
+        plt.close(fig)
+        worksheet.insert_image(cell, tmp_path)
+
+    def make_line_chart(workbook, sheet_name, df, x_col, y_cols, title, y_axis_name):
+        chart = workbook.add_chart({"type": "line"})
+        x_idx = df.columns.get_loc(x_col)
+        nrows = len(df)
+
+        for y_col in y_cols:
+            if y_col not in df.columns:
+                continue
+            y_idx = df.columns.get_loc(y_col)
+            chart.add_series({
+                "name": [sheet_name, 0, y_idx],
+                "categories": [sheet_name, 1, x_idx, nrows, x_idx],
+                "values": [sheet_name, 1, y_idx, nrows, y_idx],
+            })
+
+        chart.set_title({"name": title})
+        chart.set_x_axis({"name": x_col})
+        chart.set_y_axis({"name": y_axis_name})
+        return chart
+
+    def make_scatter_chart(workbook, sheet_name, df, x_col, y_cols, title, y_axis_name):
+        chart = workbook.add_chart({"type": "scatter", "subtype": "straight"})
+        x_idx = df.columns.get_loc(x_col)
+        nrows = len(df)
+
+        for y_col in y_cols:
+            if y_col not in df.columns:
+                continue
+            y_idx = df.columns.get_loc(y_col)
+            chart.add_series({
+                "name": [sheet_name, 0, y_idx],
+                "categories": [sheet_name, 1, x_idx, nrows, x_idx],
+                "values": [sheet_name, 1, y_idx, nrows, y_idx],
+            })
+
+        chart.set_title({"name": title})
+        chart.set_x_axis({"name": x_col})
+        chart.set_y_axis({"name": y_axis_name})
+        return chart
+
+    def compute_correlation_table(df, exposure_col, metric_cols):
+        rows = []
+        if exposure_col not in df.columns:
+            return pd.DataFrame()
+
+        for col in metric_cols:
+            if col not in df.columns:
+                continue
+
+            pair_df = df[[exposure_col, col]].dropna()
+            if len(pair_df) < 2:
+                continue
+
+            rows.append({
+                "metric": col,
+                "n": len(pair_df),
+                "pearson_corr_with_X": pair_df[exposure_col].corr(pair_df[col], method="pearson"),
+                "spearman_corr_with_X": pair_df[exposure_col].corr(pair_df[col], method="spearman"),
+                "kendall_corr_with_X": pair_df[exposure_col].corr(pair_df[col], method="kendall"),
+            })
+
+        if not rows:
+            return pd.DataFrame()
+
+        return pd.DataFrame(rows).sort_values(
+            by="pearson_corr_with_X",
+            key=lambda s: s.abs(),
+            ascending=False
+        )
+
+    def write_details_sheet(writer, df_run_full, run_id, header_fmt):
+        detail_cols = ["step"] + [col for col in cols_to_separate if col in df_run_full.columns]
+        if len(detail_cols) <= 1:
+            return
+
+        df_details = df_run_full[detail_cols].copy()
+        for col in cols_to_separate:
+            if col in df_details.columns:
+                df_details[col] = df_details[col].apply(
+                    lambda x: "\n".join(map(str, x)) if isinstance(x, (list, tuple, set)) else x
+                )
+
+        details_sheet = safe_sheet_name(f"r{run_id}_details")
+        df_details.to_excel(writer, sheet_name=details_sheet, index=False)
+        ws = writer.sheets[details_sheet]
+        write_dataframe(ws, df_details, header_fmt)
+
+        for col_idx, col_name in enumerate(df_details.columns):
+            if col_name != "step":
+                ws.set_column(col_idx, col_idx, 40)
+
+    def write_summary_sheet(writer, workbook, df_main, run_id, x_plot_col, header_fmt):
+        summary_cols = [c for c in [
+            x_plot_col, "X", "HCI", "CSM", "TBS", "pbcc",
+            "rise_streak_HCI", "rise_streak_CSM", "rise_streak_TBS"
+        ] if c in df_main.columns]
+
+        if len(summary_cols) < 2:
+            return
+
+        df_summary = df_main[summary_cols].copy()
+        sheet_name = safe_sheet_name(f"r{run_id}_summary")
+        df_summary.to_excel(writer, sheet_name=sheet_name, index=False)
+        ws = writer.sheets[sheet_name]
+        write_dataframe(ws, df_summary, header_fmt)
+
+        chart = make_line_chart(
+            workbook,
+            sheet_name,
+            df_summary,
+            x_plot_col,
+            [c for c in ["X", "HCI", "CSM", "TBS"] if c in df_summary.columns],
+            f"Core metrics vs {x_plot_col} (run {run_id})",
+            "Metric value",
+        )
+        ws.insert_chart("J2", chart, {"x_scale": 1.6, "y_scale": 1.3})
+
+    def write_normalized_comparison_sheet(writer, workbook, df_main, run_id, x_plot_col, header_fmt):
+        needed = [c for c in ["X", "HCI", "CSM", "TBS"] if c in df_main.columns]
+        if len(needed) < 2:
+            return
+
+        df_compare = df_main[[x_plot_col] + needed].copy()
+        for c in needed:
+            df_compare[f"norm_{c}"] = minmax_normalize_series(df_compare[c])
+
+        export_cols = [x_plot_col] + [f"norm_{c}" for c in needed]
+        sheet_name = safe_sheet_name(f"r{run_id}_norm_compare")
+        df_compare[export_cols].to_excel(writer, sheet_name=sheet_name, index=False)
+
+        ws = writer.sheets[sheet_name]
+        write_dataframe(ws, df_compare[export_cols], header_fmt)
+
+        # all three + X in same graph
+        chart = make_line_chart(
+            workbook,
+            sheet_name,
+            df_compare[export_cols],
+            x_plot_col,
+            [c for c in ["norm_X", "norm_HCI", "norm_CSM", "norm_TBS"] if c in df_compare.columns],
+            f"Normalised X, HCI, CSM, TBS vs {x_plot_col} (run {run_id})",
+            "Normalised value (0-1)",
+        )
+        chart.set_y_axis({"name": "Normalised value (0-1)", "min": 0, "max": 1})
+        ws.insert_chart("H2", chart, {"x_scale": 1.7, "y_scale": 1.4})
+    def write_rise_sheet(writer, workbook, df_main, run_id, x_plot_col, header_fmt):
+        rise_cols = [c for c in [
+            x_plot_col,
+            "HCI", "CSM", "TBS",
+            "rise_flag_HCI", "rise_flag_CSM", "rise_flag_TBS",
+            "rise_streak_HCI", "rise_streak_CSM", "rise_streak_TBS",
+            "rise_total_HCI", "rise_total_CSM", "rise_total_TBS",
+            "X",
+        ] if c in df_main.columns]
+
+        if len(rise_cols) <= 1:
+            return
+
+        df_rise = df_main[rise_cols].copy()
+        sheet_name = safe_sheet_name(f"r{run_id}_rise")
+        df_rise.to_excel(writer, sheet_name=sheet_name, index=False)
+
+        ws = writer.sheets[sheet_name]
+        write_dataframe(ws, df_rise, header_fmt)
+
+        streak_chart = make_line_chart(
+            workbook,
+            sheet_name,
+            df_rise,
+            x_plot_col,
+            [c for c in ["rise_streak_HCI", "rise_streak_CSM", "rise_streak_TBS"] if c in df_rise.columns],
+            f"Rise streaks vs {x_plot_col} (run {run_id})",
+            "Rise streak",
+        )
+        ws.insert_chart("S2", streak_chart, {"x_scale": 1.5, "y_scale": 1.2})
+
+        if "X" in df_rise.columns:
+            xp_cols = ["X"] + [c for c in ["rise_streak_HCI", "rise_streak_CSM", "rise_streak_TBS"] if c in df_rise.columns]
+            df_xp = df_rise[xp_cols].copy()
+
+            scatter = make_scatter_chart(
+                workbook,
+                sheet_name,
+                df_xp,
+                "X",
+                [c for c in ["rise_streak_HCI", "rise_streak_CSM", "rise_streak_TBS"] if c in df_xp.columns],
+                f"Rise streaks vs X(p) (run {run_id})",
+                "Rise streak",
+            )
+            ws.insert_chart("S22", scatter, {"x_scale": 1.5, "y_scale": 1.2})
+
+    def write_correlation_sheet(writer, workbook, df_main, run_id, header_fmt):
+        corr_targets = [
+            "HCI", "CSM", "TBS", "pbcc",
+            "delta_HCI", "delta_CSM", "delta_TBS", "delta_pbcc",
+            "scaled_HCI", "scaled_CSM", "scaled_TBS", "scaled_pbcc",
+            "rise_flag_HCI", "rise_flag_CSM", "rise_flag_TBS",
+            "rise_streak_HCI", "rise_streak_CSM", "rise_streak_TBS",
+            "rise_total_HCI", "rise_total_CSM", "rise_total_TBS",
+            "reachable_users_count", "reachable_comps_count",
+            "delta_reachable_users_count", "delta_reachable_comps_count",
+        ]
+
+        df_corr = compute_correlation_table(df_main, "X", corr_targets)
+        if df_corr.empty:
+            return
+
+        sheet_name = safe_sheet_name(f"r{run_id}_corr")
+        df_corr.to_excel(writer, sheet_name=sheet_name, index=False)
+        ws = writer.sheets[sheet_name]
+        write_dataframe(ws, df_corr, header_fmt)
+
+        chart = workbook.add_chart({"type": "column"})
+        nrows = len(df_corr)
+
+        metric_idx = df_corr.columns.get_loc("metric")
+        pearson_idx = df_corr.columns.get_loc("pearson_corr_with_X")
+        spearman_idx = df_corr.columns.get_loc("spearman_corr_with_X")
+        kendall_idx = df_corr.columns.get_loc("kendall_corr_with_X")
+
+        for idx in [pearson_idx, spearman_idx, kendall_idx]:
+            chart.add_series({
+                "name": [sheet_name, 0, idx],
+                "categories": [sheet_name, 1, metric_idx, nrows, metric_idx],
+                "values": [sheet_name, 1, idx, nrows, idx],
+            })
+
+        chart.set_title({"name": f"Correlation of metrics with Exposure X (run {run_id})"})
+        chart.set_x_axis({"name": "Metric"})
+        chart.set_y_axis({"name": "Correlation Coefficient", "min": -1, "max": 1})
+        ws.insert_chart("G2", chart, {"x_scale": 1.6, "y_scale": 1.4})
+
+    def write_heatmap_sheet(writer, df_main, run_id, header_fmt):
+        heatmap_cols = [c for c in [
+            "X", "HCI", "CSM", "TBS", "pbcc",
+            "delta_HCI", "delta_CSM", "delta_TBS", "delta_pbcc",
+            "rise_streak_HCI", "rise_streak_CSM", "rise_streak_TBS",
+            "rise_total_HCI", "rise_total_CSM", "rise_total_TBS",
+        ] if c in df_main.columns]
+
+        if len(heatmap_cols) < 2:
+            return
+
+        df_heat = df_main[heatmap_cols].copy()
+        sheet_name = safe_sheet_name(f"r{run_id}_heatmap")
+        df_heat.to_excel(writer, sheet_name=sheet_name, index=False)
+
+        ws = writer.sheets[sheet_name]
+        write_dataframe(ws, df_heat, header_fmt)
+        insert_correlation_heatmap(ws, df_heat, cell="P2", title=f"X-focused Correlation Heatmap (run {run_id})")
+
+    def write_metric_sheets(writer, workbook, df_main, run_id, x_plot_col, header_fmt):
+        # core sheets only
+        for metric_key in ["X", "HCI", "CSM", "TBS", "pbcc"]:
+            if metric_key not in df_main.columns:
+                continue
+
+            plot_cols = [x_plot_col, metric_key]
+            for extra in [f"delta_{metric_key}", f"scaled_{metric_key}"]:
+                if extra in df_main.columns:
+                    plot_cols.append(extra)
+
+            plot_cols = list(dict.fromkeys(plot_cols))
+            metric_df = df_main[plot_cols].copy()
+
+            sheet_name = safe_sheet_name(f"r{run_id}_{metric_key}")
+            metric_df.to_excel(writer, sheet_name=sheet_name, index=False)
+
+            ws = writer.sheets[sheet_name]
+            write_dataframe(ws, metric_df, header_fmt)
+
+            # main chart against step or p
+            chart_main = make_line_chart(
+                workbook,
+                sheet_name,
+                metric_df,
+                x_plot_col,
+                [c for c in metric_df.columns if c != x_plot_col],
+                build_chart_title(f"{metric_key} vs {x_plot_col} (run {run_id})", metadata),
+                metric_key,
+            )
+            ws.insert_chart("H2", chart_main, {"x_scale": 1.5, "y_scale": 1.2})
+
+            # NEW: actual-value graph against X(p)
+            # only for non-X metrics, and only if X exists
+            if metric_key != "X" and "X" in df_main.columns:
+                xp_cols = ["X", metric_key]
+                if f"delta_{metric_key}" in df_main.columns:
+                    xp_cols.append(f"delta_{metric_key}")
+                if f"scaled_{metric_key}" in df_main.columns:
+                    xp_cols.append(f"scaled_{metric_key}")
+
+                df_xp = df_main[xp_cols].copy()
+
+                xp_sheet_name = safe_sheet_name(f"r{run_id}_{metric_key}_xp")
+                df_xp.to_excel(writer, sheet_name=xp_sheet_name, index=False)
+
+                ws_xp = writer.sheets[xp_sheet_name]
+                write_dataframe(ws_xp, df_xp, header_fmt)
+
+                # actual value vs X(p)
+                scatter_actual = make_scatter_chart(
+                    workbook,
+                    xp_sheet_name,
+                    df_xp,
+                    "X",
+                    [metric_key],
+                    build_chart_title(f"{metric_key} actual vs X(p) (run {run_id})", metadata),
+                    metric_key,
+                )
+                ws_xp.insert_chart("H2", scatter_actual, {"x_scale": 1.5, "y_scale": 1.2})
+
+                # optional delta/scaled against X(p) in same sheet
+                extra_y_cols = [c for c in [f"delta_{metric_key}", f"scaled_{metric_key}"] if c in df_xp.columns]
+                if extra_y_cols:
+                    scatter_extra = make_scatter_chart(
+                        workbook,
+                        xp_sheet_name,
+                        df_xp,
+                        "X",
+                        extra_y_cols,
+                        build_chart_title(f"{metric_key} derived series vs X(p) (run {run_id})", metadata),
+                        f"{metric_key} derived",
+                    )
+                    ws_xp.insert_chart("H22", scatter_extra, {"x_scale": 1.5, "y_scale": 1.2})
+
+    # --------------------------------------------------
+    # Prepare data
+    # --------------------------------------------------
+    metrics_to_export = add_deltas_and_scaled(metrics_data, list(metric_titles.keys()))
+    metrics_to_export = add_rise_period_metrics(metrics_to_export, rise_metric_keys)
+
     df_full = normalize_metrics(metrics_to_export)
-    for metric_key, metric_label in list(metric_titles.items()):
-        metric_titles[f"delta_{metric_key}"] = f"Delta {metric_label}"
-    if df_full.empty:
-        print("No data to export")
-        return
     if df_full.empty:
         print("No data to export")
         return
 
-    # add delta columns per run
-    if "reachable_users_count" in df_full.columns:
-        df_full["delta_reachable_users_count"] = (
-            df_full.groupby("run")["reachable_users_count"]
-            .diff()
-            .fillna(df_full["reachable_users_count"])
-            .astype(int)
-        )
+    df_full = add_run_level_deltas(df_full)
 
-    if "reachable_comps_count" in df_full.columns:
-        df_full["delta_reachable_comps_count"] = (
-            df_full.groupby("run")["reachable_comps_count"]
-            .diff()
-            .fillna(df_full["reachable_comps_count"])
-            .astype(int)
-        )
+    # --------------------------------------------------
+    # Write workbook
+    # --------------------------------------------------
     with pd.ExcelWriter(filename, engine="xlsxwriter") as writer:
         workbook = writer.book
         header_fmt = workbook.add_format({
             "bold": True,
             "bg_color": "#D9EAF7",
-            "border": 1
+            "border": 1,
         })
 
         run_ids = sorted(df_full["run"].unique())
 
         for run_id in run_ids:
             df_run_full = df_full[df_full["run"] == run_id].copy()
-
-            # main sheet excludes bulky columns
             df_main = df_run_full.drop(columns=cols_to_separate, errors="ignore")
+            x_plot_col = "p" if (x_axis == "p" and "p" in df_main.columns) else "step"
 
             main_sheet = safe_sheet_name(f"run_{run_id}_data")
             df_main.to_excel(writer, sheet_name=main_sheet, index=False)
             ws_main = writer.sheets[main_sheet]
             write_dataframe(ws_main, df_main, header_fmt)
 
-            detail_cols = ["step"] + [col for col in cols_to_separate if col in df_run_full.columns]
-
-            if len(detail_cols) > 1:
-                df_details = df_run_full[detail_cols].copy()
-
-                # convert lists to readable strings inside Excel cells
-                for col in cols_to_separate:
-                    if col in df_details.columns:
-                        df_details[col] = df_details[col].apply(
-                            lambda x: "\n".join(map(str, x)) if isinstance(x, (list, tuple, set)) else x
-                        )
-
-                details_sheet = safe_sheet_name(f"r{run_id}_details")
-                df_details.to_excel(writer, sheet_name=details_sheet, index=False)
-
-                ws_details = writer.sheets[details_sheet]
-                write_dataframe(ws_details, df_details, header_fmt)
-
-                # widen these columns a bit more
-                for col_idx, col_name in enumerate(df_details.columns):
-                    if col_name != "step":
-                        ws_details.set_column(col_idx, col_idx, 40)
-            if df_full.empty:
-                print("No data to export")
-                return
-
-
-            # metric sheets + charts
-            for metric_key, metric_label in metric_titles.items():
-                if metric_key not in df_main.columns:
-                    continue
-
-                plot_cols = ["step"]
-                if x_axis == "p" and "p" in df_main.columns:
-                    plot_cols = ["p"]
-
-                plot_cols += [metric_key]
-
-                delta_metric_key = f"delta_{metric_key}"
-                if delta_metric_key in df_main.columns:
-                    plot_cols.append(delta_metric_key)
-
-                scaled_metric_key = f"scaled_{metric_key}"
-                if scaled_metric_key in df_main.columns:
-                    plot_cols.append(scaled_metric_key)
-
-                if "reachable_users_count" in df_main.columns:
-                    plot_cols.append("reachable_users_count")
-                if "reachable_comps_count" in df_main.columns:
-                    plot_cols.append("reachable_comps_count")
-
-                if "delta_reachable_users_count" in df_main.columns:
-                    plot_cols.append("delta_reachable_users_count")
-                if "delta_reachable_comps_count" in df_main.columns:
-                    plot_cols.append("delta_reachable_comps_count")
-
-                metric_df = df_main[plot_cols].copy()
-
-                sheet_name = safe_sheet_name(f"r{run_id}_{metric_label}")
-                metric_df.to_excel(writer, sheet_name=sheet_name, index=False)
-                ws = writer.sheets[sheet_name]
-                write_dataframe(ws, metric_df, header_fmt)
-
-                nrows = len(metric_df)
-                if nrows == 0:
-                    continue
-
-                x_col = plot_cols[0]
-                x_idx = metric_df.columns.get_loc(x_col)
-                metric_idx = metric_df.columns.get_loc(metric_key)
-
-                # metric chart
-                chart_metric = workbook.add_chart({"type": "line"})
-                chart_metric.add_series({
-                    "name":       [sheet_name, 0, metric_idx],
-                    "categories": [sheet_name, 1, x_idx, nrows, x_idx],
-                    "values":     [sheet_name, 1, metric_idx, nrows, metric_idx],
-                })
-                # chart_metric.set_title({"name": f"{metric_label} vs {x_col} (run {run_id})"})
-                chart_metric.set_title({
-                    "name": build_chart_title(f"{metric_label} vs {x_col} (run {run_id})", metadata)
-                })
-                chart_metric.set_x_axis({"name": x_col})
-                chart_metric.set_y_axis({"name": metric_label})
-                ws.insert_chart("K2", chart_metric, {"x_scale": 1.4, "y_scale": 1.2})
-                if scaled_metric_key in metric_df.columns:
-                    x_idx = metric_df.columns.get_loc(x_col)
-                    metric_scaled_idx = metric_df.columns.get_loc(scaled_metric_key)
-
-                    chart_scaled_metric = workbook.add_chart({"type": "line"})
-                    chart_scaled_metric.add_series({
-                        "name": [sheet_name, 0, metric_scaled_idx],
-                        "categories": [sheet_name, 1, x_idx, nrows, x_idx],
-                        "values": [sheet_name, 1, metric_scaled_idx, nrows, metric_scaled_idx],
-                    })
-                    chart_scaled_metric.set_title({
-                        "name": build_chart_title(f"{scaled_metric_key} vs {x_col} (run {run_id})", metadata)
-                    })
-                    chart_scaled_metric.set_x_axis({"name": x_col})
-                    chart_scaled_metric.set_y_axis({"name": scaled_metric_key})
-                    ws.insert_chart("K56", chart_scaled_metric, {"x_scale": 1.4, "y_scale": 1.2})
-                # reachable users chart
-                if "reachable_users_count" in metric_df.columns:
-                    users_idx = metric_df.columns.get_loc("reachable_users_count")
-                    chart_users = workbook.add_chart({"type": "line"})
-                    chart_users.add_series({
-                        "name":       [sheet_name, 0, users_idx],
-                        "categories": [sheet_name, 1, x_idx, nrows, x_idx],
-                        "values":     [sheet_name, 1, users_idx, nrows, users_idx],
-                    })
-                    chart_users.set_title({"name": f"Reachable Users vs {x_col} (run {run_id})"})
-                    chart_users.set_x_axis({"name": x_col})
-                    chart_users.set_y_axis({"name": "Reachable Users"})
-                    ws.insert_chart("K20", chart_users, {"x_scale": 1.4, "y_scale": 1.2})
-
-                # reachable comps chart
-                if "reachable_comps_count" in metric_df.columns:
-                    comps_idx = metric_df.columns.get_loc("reachable_comps_count")
-                    chart_comps = workbook.add_chart({"type": "line"})
-                    chart_comps.add_series({
-                        "name":       [sheet_name, 0, comps_idx],
-                        "categories": [sheet_name, 1, x_idx, nrows, x_idx],
-                        "values":     [sheet_name, 1, comps_idx, nrows, comps_idx],
-                    })
-                    chart_comps.set_title({"name": f"Reachable Computers vs {x_col} (run {run_id})"})
-                    chart_comps.set_x_axis({"name": x_col})
-                    chart_comps.set_y_axis({"name": "Reachable Computers"})
-                    ws.insert_chart("K38", chart_comps, {"x_scale": 1.4, "y_scale": 1.2})
+            write_details_sheet(writer, df_run_full, run_id, header_fmt)
+            write_summary_sheet(writer, workbook, df_main, run_id, x_plot_col, header_fmt)
+            write_normalized_comparison_sheet(writer, workbook, df_main, run_id, x_plot_col, header_fmt)
+            write_rise_sheet(writer, workbook, df_main, run_id, x_plot_col, header_fmt)
+            write_correlation_sheet(writer, workbook, df_main, run_id, header_fmt)
+            write_heatmap_sheet(writer, df_main, run_id, header_fmt)
+            write_metric_sheets(writer, workbook, df_main, run_id, x_plot_col, header_fmt)
 
     print(f"Dataset exported to {filename}")
+def insert_correlation_heatmap(workbook, worksheet, df, cell="J2", title="Correlation Heatmap"):
+    import tempfile
+    import os
+
+    numeric_df = df.select_dtypes(include=["number"]).copy()
+    if numeric_df.empty or numeric_df.shape[1] < 2:
+        return None
+
+    corr = numeric_df.corr(method="pearson")
+
+    fig, ax = plt.subplots(figsize=(10, 8))
+    im = ax.imshow(corr.values, aspect="auto", interpolation="nearest")
+
+    ax.set_xticks(range(len(corr.columns)))
+    ax.set_xticklabels(corr.columns, rotation=90)
+    ax.set_yticks(range(len(corr.index)))
+    ax.set_yticklabels(corr.index)
+    ax.set_title(title)
+
+    # annotate values
+    for i in range(len(corr.index)):
+        for j in range(len(corr.columns)):
+            val = corr.iloc[i, j]
+            ax.text(j, i, f"{val:.2f}", ha="center", va="center", fontsize=8)
+
+    fig.colorbar(im, ax=ax)
+    fig.tight_layout()
+
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+    tmp_path = tmp.name
+    tmp.close()
+
+    fig.savefig(tmp_path, bbox_inches="tight", dpi=180)
+    plt.close(fig)
+
+    worksheet.insert_image(cell, tmp_path)
+    return tmp_path
+
+

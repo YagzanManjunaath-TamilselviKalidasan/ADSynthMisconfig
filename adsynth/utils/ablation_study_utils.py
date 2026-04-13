@@ -3,6 +3,7 @@ import re
 from typing import List, Optional, Dict
 
 import numpy as np
+import pandas as pd
 
 from adsynth.DATABASE import NODES, PAW_TIERS, S_TIERS_LOCATIONS, S_TIERS, ENABLED_USERS, ADMIN_USERS, WS_TIERS, \
     WS_TIERS_LOCATIONS, USER_TIER, COMPUTER_TIER, EDGES
@@ -149,6 +150,11 @@ def exposure_X(reachable_users_count, reachable_comps_count, num_users, num_comp
     denom = num_users + num_computers
     return (reachable_users_count + reachable_comps_count) / denom if denom else 0.0
 
+def exposure_users(reachable_users_count, num_users):
+    return reachable_users_count / num_users if num_users else 0.0
+
+def exposure_computers(reachable_comps_count, num_computers):
+    return reachable_comps_count / num_computers if num_computers else 0.0
 
 def exposure_parts(reachable_users_count, reachable_comps_count, num_users, num_computers):
     Xu = reachable_users_count / num_users if num_users else 0.0
@@ -202,7 +208,7 @@ def pbcc_bounded_bfs_footholds(
         networkx_graph,
         foothold_names,
         high_value_target_name,
-        L=4,
+        L=10,
         allowed_edge_labels=None,
         session_edge_labels=None,
 ):
@@ -266,7 +272,9 @@ def pbcc_bounded_bfs_footholds(
             node, depth, seen_sess, seen_non_sess, path_nodes = q.popleft()
 
             # successful mixed-type bounded foothold -> target path
-            if node == target_id and seen_sess and seen_non_sess:
+            if (node == target_id) :
+                    # and seen_sess and seen_non_sess)\
+
                 successful_paths += 1
 
                 # interior nodes only: exclude foothold and target
@@ -330,6 +338,278 @@ def pbcc_bounded_bfs_footholds(
     }
 
 
+from collections import Counter, deque
+from collections import Counter, deque, defaultdict
+
+def pbcc_bounded_bfs_footholds_debug(
+    networkx_graph,
+    foothold_names,
+    high_value_target_name,
+    L=4,
+    allowed_edge_labels=None,
+    session_edge_labels=None,
+    max_example_paths_per_type=5,
+):
+    """
+    Debug-friendly PBCC computation.
+
+    Reports:
+    - reachable target paths by type
+    - session-only / non-session-only / mixed counts
+    - exact top bridge nodes
+    - why each foothold failed
+    """
+
+    if allowed_edge_labels is None:
+        allowed_edge_labels = {
+            "HasSession",
+            "AdminTo",
+            "CanRDP",
+            "CanPSRemote",
+            "ExecuteDCOM",
+            "AllowedToDelegate",
+            "ReadLAPSPassword",
+            "SQLAdmin",
+            "AllowedToAct",
+            "MemberOf",
+        }
+
+    if session_edge_labels is None:
+        session_edge_labels = {"HasSession"}
+
+    def node_name(n):
+        return networkx_graph.nodes[n].get("name", n)
+
+    def classify_path(seen_sess, seen_non_sess):
+        if seen_sess and seen_non_sess:
+            return "mixed"
+        elif seen_sess:
+            return "session_only"
+        elif seen_non_sess:
+            return "non_session_only"
+        return "unknown"
+
+    def edge_labels_between(u, v):
+        labs = get_edge_labels(networkx_graph, u, v)
+        return labs if labs else []
+
+    target_id = get_id_from_name(networkx_graph, high_value_target_name)
+    if target_id is None or target_id not in networkx_graph:
+        return {
+            "pbcc": 0.0,
+            "b": {},
+            "bridge_hits": {},
+            "successful_paths": 0,
+            "target_id": None,
+            "foothold_ids": [],
+            "error": f"Target not found: {high_value_target_name}",
+        }
+
+    foothold_ids = []
+    invalid_footholds = []
+    for name in foothold_names:
+        nid = get_id_from_name(networkx_graph, name)
+        if nid is not None and nid in networkx_graph:
+            foothold_ids.append(nid)
+        else:
+            invalid_footholds.append(name)
+
+    if not foothold_ids:
+        return {
+            "pbcc": 0.0,
+            "b": {},
+            "bridge_hits": {},
+            "successful_paths": 0,
+            "target_id": target_id,
+            "foothold_ids": [],
+            "invalid_footholds": invalid_footholds,
+            "error": "No valid footholds found",
+        }
+
+    bridge_counter = Counter()
+    successful_paths = 0
+
+    path_type_counts = Counter()
+    path_type_examples = {
+        "mixed": [],
+        "session_only": [],
+        "non_session_only": [],
+        "unknown": [],
+    }
+
+    foothold_debug = {}
+
+    # global graph label stats
+    graph_label_counter = Counter()
+    for u, v in networkx_graph.edges():
+        for lab in edge_labels_between(u, v):
+            graph_label_counter[lab] += 1
+
+    for src in foothold_ids:
+        src_name = node_name(src)
+
+        q = deque([(src, 0, False, False, [src], [])])
+        # state = (node, depth, seen_sess, seen_non_sess)
+        visited = {(src, 0, False, False)}
+
+        reached_target_any = 0
+        reached_target_by_type = Counter()
+
+        expanded_states = 0
+        pruned_depth = 0
+        pruned_no_labels = 0
+        pruned_no_allowed_labels = 0
+
+        seen_any_session_edge = False
+        seen_any_non_session_edge = False
+
+        max_depth_reached = 0
+
+        while q:
+            node, depth, seen_sess, seen_non_sess, path_nodes, path_edge_labels = q.popleft()
+            expanded_states += 1
+            max_depth_reached = max(max_depth_reached, depth)
+
+            if node == target_id:
+                ptype = classify_path(seen_sess, seen_non_sess)
+                reached_target_any += 1
+                reached_target_by_type[ptype] += 1
+                path_type_counts[ptype] += 1
+
+                if len(path_type_examples[ptype]) < max_example_paths_per_type:
+                    path_type_examples[ptype].append({
+                        "source": src_name,
+                        "depth": depth,
+                        "nodes": [node_name(n) for n in path_nodes],
+                        "edge_labels": list(path_edge_labels),
+                    })
+
+                if ptype == "mixed":
+                    successful_paths += 1
+                    interior_nodes = path_nodes[1:-1]
+                    for n in set(interior_nodes):
+                        bridge_counter[n] += 1
+
+                # continue is fine; no need to expand beyond target for this metric
+                continue
+
+            if depth >= L:
+                pruned_depth += 1
+                continue
+
+            for nbr in networkx_graph.successors(node):
+                edge_labels = edge_labels_between(node, nbr)
+                if not edge_labels:
+                    pruned_no_labels += 1
+                    continue
+
+                valid_labels = [lab for lab in edge_labels if lab in allowed_edge_labels]
+                if not valid_labels:
+                    pruned_no_allowed_labels += 1
+                    continue
+
+                for lab in valid_labels:
+                    if lab in session_edge_labels:
+                        seen_any_session_edge = True
+                    else:
+                        seen_any_non_session_edge = True
+
+                    next_seen_sess = seen_sess or (lab in session_edge_labels)
+                    next_seen_non_sess = seen_non_sess or (lab not in session_edge_labels)
+
+                    state = (nbr, depth + 1, next_seen_sess, next_seen_non_sess)
+                    if state in visited:
+                        continue
+
+                    visited.add(state)
+                    q.append((
+                        nbr,
+                        depth + 1,
+                        next_seen_sess,
+                        next_seen_non_sess,
+                        path_nodes + [nbr],
+                        path_edge_labels + [lab],
+                    ))
+
+        # explain foothold outcome
+        if reached_target_any == 0:
+            if max_depth_reached >= L:
+                reason = f"target_not_reached_within_bound_L={L}"
+            else:
+                reason = "target_not_reachable_under_allowed_edges"
+        elif reached_target_by_type["mixed"] == 0:
+            if reached_target_by_type["session_only"] > 0 and reached_target_by_type["non_session_only"] > 0:
+                reason = "target_reached_but_no_single_path_contains_both_session_and_non_session_edges"
+            elif reached_target_by_type["session_only"] > 0:
+                reason = "target_reached_only_via_session_only_paths"
+            elif reached_target_by_type["non_session_only"] > 0:
+                reason = "target_reached_only_via_non_session_only_paths"
+            else:
+                reason = "target_reached_but_no_mixed_path"
+        else:
+            reason = "success"
+
+        foothold_debug[src_name] = {
+            "src_id": src,
+            "reached_target_any": reached_target_any,
+            "reached_target_by_type": dict(reached_target_by_type),
+            "seen_any_session_edge_during_search": seen_any_session_edge,
+            "seen_any_non_session_edge_during_search": seen_any_non_session_edge,
+            "expanded_states": expanded_states,
+            "visited_states": len(visited),
+            "max_depth_reached": max_depth_reached,
+            "pruned_depth": pruned_depth,
+            "pruned_no_labels": pruned_no_labels,
+            "pruned_no_allowed_labels": pruned_no_allowed_labels,
+            "reason": reason,
+        }
+
+    if successful_paths == 0:
+        return {
+            "pbcc": 0.0,
+            "b": {},
+            "bridge_hits": {},
+            "successful_paths": 0,
+            "target_id": target_id,
+            "target_name": node_name(target_id),
+            "foothold_ids": foothold_ids,
+            "foothold_names_valid": [node_name(n) for n in foothold_ids],
+            "invalid_footholds": invalid_footholds,
+            "path_type_counts": dict(path_type_counts),
+            "path_type_examples": path_type_examples,
+            "foothold_debug": foothold_debug,
+            "graph_label_counts": dict(graph_label_counter),
+            "allowed_edge_labels": sorted(allowed_edge_labels),
+            "session_edge_labels": sorted(session_edge_labels),
+            "failure_summary": "No mixed bounded foothold->target paths found, so PBCC = 0",
+        }
+
+    b = {node: cnt / successful_paths for node, cnt in bridge_counter.items()}
+    pbcc = sum(val * val for val in b.values())
+
+    return {
+        "pbcc": pbcc,
+        "b": {
+            node_name(node): val
+            for node, val in sorted(b.items(), key=lambda x: x[1], reverse=True)
+        },
+        "bridge_hits": {
+            node_name(node): cnt
+            for node, cnt in sorted(bridge_counter.items(), key=lambda x: x[1], reverse=True)
+        },
+        "successful_paths": successful_paths,
+        "target_id": target_id,
+        "target_name": node_name(target_id),
+        "foothold_ids": foothold_ids,
+        "foothold_names_valid": [node_name(n) for n in foothold_ids],
+        "invalid_footholds": invalid_footholds,
+        "path_type_counts": dict(path_type_counts),
+        "path_type_examples": path_type_examples,
+        "foothold_debug": foothold_debug,
+        "graph_label_counts": dict(graph_label_counter),
+        "allowed_edge_labels": sorted(allowed_edge_labels),
+        "session_edge_labels": sorted(session_edge_labels),
+    }
 def compute_delta_X(misconfig_growth_metrics):
     steps = sorted(misconfig_growth_metrics.keys())
 
@@ -532,3 +812,50 @@ def estimate_indicator_thresholds(
         "mu_PBCC": mu_pbcc,
         "sigma_PBCC": sigma_pbcc,
     }
+def minmax_normalize_series(series):
+    s = pd.to_numeric(series, errors="coerce")
+    if s.dropna().empty:
+        return s
+    s_min = s.min()
+    s_max = s.max()
+    if pd.isna(s_min) or pd.isna(s_max):
+        return s
+    if math.isclose(s_min, s_max):
+        return pd.Series([0.0] * len(s), index=s.index)
+    return (s - s_min) / (s_max - s_min)
+
+
+def add_rise_period_metrics(metrics_dict, metric_keys):
+    steps = sorted(metrics_dict.keys())
+
+    streaks = {k: 0 for k in metric_keys}
+    totals = {k: 0 for k in metric_keys}
+    prev_vals = {k: None for k in metric_keys}
+
+    for step in steps:
+        row = metrics_dict[step]
+
+        for k in metric_keys:
+            curr = row.get(k)
+
+            if not isinstance(curr, (int, float)):
+                row[f"rise_flag_{k}"] = None
+                row[f"rise_streak_{k}"] = None
+                row[f"rise_total_{k}"] = totals[k]
+                continue
+
+            prev = prev_vals[k]
+
+            if isinstance(prev, (int, float)) and curr > prev:
+                streaks[k] += 1
+                totals[k] += 1
+                row[f"rise_flag_{k}"] = 1
+            else:
+                streaks[k] = 0
+                row[f"rise_flag_{k}"] = 0
+
+            row[f"rise_streak_{k}"] = streaks[k]
+            row[f"rise_total_{k}"] = totals[k]
+            prev_vals[k] = curr
+
+    return metrics_dict
