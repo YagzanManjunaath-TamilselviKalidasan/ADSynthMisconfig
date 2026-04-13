@@ -5,7 +5,7 @@ import io
 import contextlib
 
 from adsynth.ADSynth import MainMenu, safe_import_neo4j
-from adsynth.utils.ablation_study_utils import populate_node_tiers
+from adsynth.utils.ablation_study_utils import populate_node_tiers, build_tier_caches
 from adsynth.utils.data import get_parameters_from_json
 from ui.MisconfigInjectionPanel import MisconfigInjectionPanel
 
@@ -175,6 +175,7 @@ class ADSynthUI:
                     self.menu.parameters_json_path = json_path
                     self.menu.do_generate(json_path)
                     populate_node_tiers()
+                    build_tier_caches()
 
                 self.log(buffer.getvalue())
                 self.log("Graph generation completed.\n")

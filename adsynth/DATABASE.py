@@ -217,3 +217,8 @@ LOCAL_ADMINS = list() # not processed names
 
 USER_TIER = {} #Tier of the user
 COMPUTER_TIER = {} # Tier of the computer
+
+ID_TO_NAME = {}
+TOTAL_T0_USERS = 0
+ALL_LOW_TIER_COMPUTERS = set()
+
