@@ -6,34 +6,61 @@ import numpy as np
 import pandas as pd
 
 from adsynth.DATABASE import NODES, PAW_TIERS, S_TIERS_LOCATIONS, S_TIERS, ENABLED_USERS, ADMIN_USERS, WS_TIERS, \
-    WS_TIERS_LOCATIONS, USER_TIER, COMPUTER_TIER, EDGES
+    WS_TIERS_LOCATIONS, USER_TIER, COMPUTER_TIER, EDGES, ALL_LOW_TIER_COMPUTERS,TOTAL_T0_USERS,ID_TO_NAME
 from adsynth.EXPERIMENT_DATABASE import EXP_EDGES
-
+import adsynth.DATABASE as DB
 from collections import Counter
 from scipy.stats import t
 
-
 def populate_node_tiers():
-    for tier, users in enumerate(ADMIN_USERS):
-        for user in users:
-            USER_TIER[user] = tier
-    for tier, users in enumerate(ENABLED_USERS):
-        for user in users:
-            USER_TIER[user] = tier
+    DB.USER_TIER.clear()
+    DB.COMPUTER_TIER.clear()
 
-    for tier, servers in enumerate(S_TIERS):
+    for tier, users in enumerate(DB.ADMIN_USERS):
+        for user in users:
+            DB.USER_TIER[user] = tier
+
+    for tier, users in enumerate(DB.ENABLED_USERS):
+        for user in users:
+            DB.USER_TIER.setdefault(user, tier)
+
+    for tier, servers in enumerate(DB.S_TIERS):
         for server in servers:
-            COMPUTER_TIER[server] = tier
+            DB.COMPUTER_TIER[server] = tier
 
-    for tier, paws in enumerate(PAW_TIERS):
+    for tier, paws in enumerate(DB.PAW_TIERS):
         for paw in paws:
-            COMPUTER_TIER[paw] = tier
+            DB.COMPUTER_TIER[paw] = tier
 
-    for tier, ws_list in enumerate(WS_TIERS):
+    for tier, ws_list in enumerate(DB.WS_TIERS):
         for ws in ws_list:
-            COMPUTER_TIER[ws] = tier
+            DB.COMPUTER_TIER[ws] = tier
+def build_tier_caches(low_tiers=None, tier0_value=0):
+    if low_tiers is None:
+        low_tiers = {2}
 
+    DB.ID_TO_NAME.clear()
+    DB.ALL_LOW_TIER_COMPUTERS.clear()
 
+    seen_t0_users = set()
+
+    for node in DB.NODES:
+        node_id = node.get("id")
+        props = node.get("properties", {})
+        name = props.get("name")
+
+        if not node_id or not name:
+            continue
+
+        DB.ID_TO_NAME[node_id] = name
+
+        if name in DB.USER_TIER and DB.USER_TIER[name] == tier0_value:
+            seen_t0_users.add(name)
+
+        if name in DB.COMPUTER_TIER and DB.COMPUTER_TIER[name] in low_tiers:
+            DB.ALL_LOW_TIER_COMPUTERS.add(node_id)
+
+    DB.TOTAL_T0_USERS = len(seen_t0_users)
 def get_baseline_from_AD(misconfig_type, TARGET_LABELS):
 
 
@@ -104,47 +131,64 @@ def user_tier_fn(dn: str):
     # return int(m.group(1)) if m else 2
 
 
-def indicators_hci_csm_tbs(EXP_EDGE, misconfig_growth_metrics, misconfig_session_count, low_tiers={2}, eps=1.0):
-    has_Session_edge_count = [e for e in EXP_EDGE if e.get("label") == "HasSession"]
+def indicators_hci_csm_tbs(
+    EXP_EDGE,
+    misconfig_growth_metrics,
+    misconfig_session_count,
+    num_users,
+    TOTAL_T0_USERS,
+    low_tiers=None,
+    eps=1.0,
+):
+    if low_tiers is None:
+        low_tiers = {2}
 
-    d_sess = Counter(str(e["start"]["id"]) for e in has_Session_edge_count)
+    has_session_edges = [e for e in EXP_EDGE if e.get("label") == "HasSession"]
 
-    C_low = {c for c in d_sess.keys() if comp_tier_fn(c) in low_tiers}
+    d_sess = Counter(str(e["start"]["id"]) for e in has_session_edges)
 
+    # Prefer all cached low-tier computers; fall back to active low-tier computers only
+    if ALL_LOW_TIER_COMPUTERS:
+        C_low = {str(c) for c in ALL_LOW_TIER_COMPUTERS if comp_tier_fn(str(c)) in low_tiers}
+    else:
+        C_low = {c for c in d_sess.keys() if comp_tier_fn(c) in low_tiers}
+
+    # HCI
     if not C_low:
         HCI = 0.0
     else:
-        dbar = sum(d_sess[c] for c in C_low) / len(C_low)
+        dbar = sum(d_sess.get(c, 0) for c in C_low) / len(C_low)
         denom = (dbar + eps) ** 2
-        HCI = (1 / len(C_low)) * sum((d_sess[c] ** 2) / denom for c in C_low)
-
-    U = {str(e["end"]["id"]) for e in has_Session_edge_count}
+        HCI = (1 / len(C_low)) * sum((d_sess.get(c, 0) ** 2) / denom for c in C_low)
 
     cross = 0
     t0_cross = 0
-    U_T0 = set()
 
-    for e in has_Session_edge_count:
+    for e in has_session_edges:
         c = str(e["start"]["id"])
         u = str(e["end"]["id"])
+
         t_c = comp_tier_fn(c)
         t_u = user_tier_fn(u)
-        if t_u == 0:
-            U_T0.add(u)
+
+        if t_c == -1 or t_u == -1:
+            continue
+
 
         if t_u < t_c:
             cross += 1
             if t_u == 0 and t_c > 0:
                 t0_cross += 1
 
-    CSM = cross / len(U) if U else 0.0
-    TBS = t0_cross / len(U_T0) if U_T0 else 0.0
+    # CSM = cross-tier session mass / total users
+    CSM = cross / num_users if num_users else 0.0
+
+    # TBS = Tier 0 boundary-violating sessions / total Tier 0 users
+    TBS = t0_cross / TOTAL_T0_USERS if TOTAL_T0_USERS else 0.0
 
     misconfig_growth_metrics[misconfig_session_count]["HCI"] = HCI
     misconfig_growth_metrics[misconfig_session_count]["CSM"] = CSM
     misconfig_growth_metrics[misconfig_session_count]["TBS"] = TBS
-    return
-
 
 def exposure_X(reachable_users_count, reachable_comps_count, num_users, num_computers):
     denom = num_users + num_computers
@@ -340,7 +384,269 @@ def pbcc_bounded_bfs_footholds(
 
 from collections import Counter, deque
 from collections import Counter, deque, defaultdict
+from collections import Counter, deque
 
+def pbcc_bounded_bfs_tier2_computers_debug(
+    networkx_graph,
+    high_value_target_name,
+    L=4,
+    foothold_tier=2,
+    allowed_edge_labels=None,
+    session_edge_labels=None,
+    max_example_paths_per_type=5,
+):
+
+    if allowed_edge_labels is None:
+        allowed_edge_labels = {
+            "HasSession",
+            "AdminTo",
+            "CanRDP",
+            "CanPSRemote",
+            "ExecuteDCOM",
+            "AllowedToDelegate",
+            "ReadLAPSPassword",
+            "SQLAdmin",
+            "AllowedToAct",
+            "MemberOf",
+        }
+
+    if session_edge_labels is None:
+        session_edge_labels = {"HasSession"}
+
+    def node_name(n):
+        return networkx_graph.nodes[n].get("name", n)
+
+    def classify_path(seen_sess, seen_non_sess):
+        if seen_sess and seen_non_sess:
+            return "mixed"
+        elif seen_sess:
+            return "session_only"
+        elif seen_non_sess:
+            return "non_session_only"
+        return "unknown"
+
+    def edge_labels_between(u, v):
+        labs = get_edge_labels(networkx_graph, u, v)
+        return labs if labs else []
+
+    # Target
+    target_id = get_id_from_name(networkx_graph, high_value_target_name)
+    if target_id is None or target_id not in networkx_graph:
+        return {
+            "pbcc": 0.0,
+            "b": {},
+            "bridge_hits": {},
+            "successful_paths": 0,
+            "target_id": None,
+            "foothold_ids": [],
+            "error": f"Target not found: {high_value_target_name}",
+        }
+
+    # Tier-2 computer footholds
+    foothold_ids = []
+    foothold_names_valid = []
+
+    for nid in networkx_graph.nodes:
+        name = node_name(nid)
+        if COMPUTER_TIER.get(name, -1) == foothold_tier:
+            foothold_ids.append(nid)
+            foothold_names_valid.append(name)
+
+    if not foothold_ids:
+        return {
+            "pbcc": 0.0,
+            "b": {},
+            "bridge_hits": {},
+            "successful_paths": 0,
+            "target_id": target_id,
+            "target_name": node_name(target_id),
+            "foothold_ids": [],
+            "foothold_names_valid": [],
+            "error": f"No Tier-{foothold_tier} computer footholds found",
+        }
+
+    bridge_counter = Counter()
+    successful_paths = 0
+
+    path_type_counts = Counter()
+    path_type_examples = {
+        "mixed": [],
+        "session_only": [],
+        "non_session_only": [],
+        "unknown": [],
+    }
+
+    foothold_debug = {}
+
+    # Global graph label stats
+    graph_label_counter = Counter()
+    for u, v in networkx_graph.edges():
+        for lab in edge_labels_between(u, v):
+            graph_label_counter[lab] += 1
+
+    for src in foothold_ids:
+        src_name = node_name(src)
+
+        q = deque([(src, 0, False, False, [src], [])])
+        # state = (node, depth, seen_sess, seen_non_sess)
+        visited = {(src, 0, False, False)}
+
+        reached_target_any = 0
+        reached_target_by_type = Counter()
+
+        expanded_states = 0
+        pruned_depth = 0
+        pruned_no_labels = 0
+        pruned_no_allowed_labels = 0
+
+        seen_any_session_edge = False
+        seen_any_non_session_edge = False
+
+        max_depth_reached = 0
+
+        while q:
+            node, depth, seen_sess, seen_non_sess, path_nodes, path_edge_labels = q.popleft()
+            expanded_states += 1
+            max_depth_reached = max(max_depth_reached, depth)
+
+            if node == target_id:
+                ptype = classify_path(seen_sess, seen_non_sess)
+                reached_target_any += 1
+                reached_target_by_type[ptype] += 1
+                path_type_counts[ptype] += 1
+
+                if len(path_type_examples[ptype]) < max_example_paths_per_type:
+                    path_type_examples[ptype].append({
+                        "source": src_name,
+                        "depth": depth,
+                        "nodes": [node_name(n) for n in path_nodes],
+                        "edge_labels": list(path_edge_labels),
+                    })
+
+                # PBCC counts only mixed paths as bridge-forming paths
+                if ptype == "mixed":
+                    successful_paths += 1
+                    interior_nodes = path_nodes[1:-1]
+                    for n in set(interior_nodes):
+                        bridge_counter[n] += 1
+
+                continue
+
+            if depth >= L:
+                pruned_depth += 1
+                continue
+
+            for nbr in networkx_graph.successors(node):
+                edge_labels = edge_labels_between(node, nbr)
+                if not edge_labels:
+                    pruned_no_labels += 1
+                    continue
+
+                valid_labels = [lab for lab in edge_labels if lab in allowed_edge_labels]
+                if not valid_labels:
+                    pruned_no_allowed_labels += 1
+                    continue
+
+                for lab in valid_labels:
+                    if lab in session_edge_labels:
+                        seen_any_session_edge = True
+                    else:
+                        seen_any_non_session_edge = True
+
+                    next_seen_sess = seen_sess or (lab in session_edge_labels)
+                    next_seen_non_sess = seen_non_sess or (lab not in session_edge_labels)
+
+                    state = (nbr, depth + 1, next_seen_sess, next_seen_non_sess)
+                    if state in visited:
+                        continue
+
+                    visited.add(state)
+                    q.append((
+                        nbr,
+                        depth + 1,
+                        next_seen_sess,
+                        next_seen_non_sess,
+                        path_nodes + [nbr],
+                        path_edge_labels + [lab],
+                    ))
+
+        # Explain foothold outcome
+        if reached_target_any == 0:
+            if max_depth_reached >= L:
+                reason = f"target_not_reached_within_bound_L={L}"
+            else:
+                reason = "target_not_reachable_under_allowed_edges"
+        elif reached_target_by_type["mixed"] == 0:
+            if reached_target_by_type["session_only"] > 0 and reached_target_by_type["non_session_only"] > 0:
+                reason = "target_reached_but_no_single_path_contains_both_session_and_non_session_edges"
+            elif reached_target_by_type["session_only"] > 0:
+                reason = "target_reached_only_via_session_only_paths"
+            elif reached_target_by_type["non_session_only"] > 0:
+                reason = "target_reached_only_via_non_session_only_paths"
+            else:
+                reason = "target_reached_but_no_mixed_path"
+        else:
+            reason = "success"
+
+        foothold_debug[src_name] = {
+            "src_id": src,
+            "reached_target_any": reached_target_any,
+            "reached_target_by_type": dict(reached_target_by_type),
+            "seen_any_session_edge_during_search": seen_any_session_edge,
+            "seen_any_non_session_edge_during_search": seen_any_non_session_edge,
+            "expanded_states": expanded_states,
+            "visited_states": len(visited),
+            "max_depth_reached": max_depth_reached,
+            "pruned_depth": pruned_depth,
+            "pruned_no_labels": pruned_no_labels,
+            "pruned_no_allowed_labels": pruned_no_allowed_labels,
+            "reason": reason,
+        }
+
+    if successful_paths == 0:
+        return {
+            "pbcc": 0.0,
+            "b": {},
+            "bridge_hits": {},
+            "successful_paths": 0,
+            "target_id": target_id,
+            "target_name": node_name(target_id),
+            "foothold_ids": foothold_ids,
+            "foothold_names_valid": foothold_names_valid,
+            "path_type_counts": dict(path_type_counts),
+            "path_type_examples": path_type_examples,
+            "foothold_debug": foothold_debug,
+            "graph_label_counts": dict(graph_label_counter),
+            "allowed_edge_labels": sorted(allowed_edge_labels),
+            "session_edge_labels": sorted(session_edge_labels),
+            "failure_summary": "No mixed bounded Tier-2-computer -> target paths found, so PBCC = 0",
+        }
+
+    b = {node: cnt / successful_paths for node, cnt in bridge_counter.items()}
+    pbcc = sum(val * val for val in b.values())
+
+    return {
+        "pbcc": pbcc,
+        "b": {
+            node_name(node): val
+            for node, val in sorted(b.items(), key=lambda x: x[1], reverse=True)
+        },
+        "bridge_hits": {
+            node_name(node): cnt
+            for node, cnt in sorted(bridge_counter.items(), key=lambda x: x[1], reverse=True)
+        },
+        "successful_paths": successful_paths,
+        "target_id": target_id,
+        "target_name": node_name(target_id),
+        "foothold_ids": foothold_ids,
+        "foothold_names_valid": foothold_names_valid,
+        "path_type_counts": dict(path_type_counts),
+        "path_type_examples": path_type_examples,
+        "foothold_debug": foothold_debug,
+        "graph_label_counts": dict(graph_label_counter),
+        "allowed_edge_labels": sorted(allowed_edge_labels),
+        "session_edge_labels": sorted(session_edge_labels),
+    }
 def pbcc_bounded_bfs_footholds_debug(
     networkx_graph,
     foothold_names,
@@ -613,6 +919,7 @@ def pbcc_bounded_bfs_footholds_debug(
 def compute_delta_X(misconfig_growth_metrics):
     steps = sorted(misconfig_growth_metrics.keys())
 
+    misconfig_growth_metrics[steps[0]]["delta_X"] = 0.0
     for i in range(1, len(steps)):
         curr = steps[i]
         prev = steps[i - 1]
@@ -626,7 +933,7 @@ def compute_delta_X(misconfig_growth_metrics):
     return misconfig_growth_metrics
 
 
-def find_p_star(misconfig_growth_metrics):
+def find_p_max_delta(misconfig_growth_metrics):
     max_jump = -float("inf")
     p_star = None
 
@@ -660,32 +967,32 @@ def compute_hub_correlation(misconfig_growth_metrics):
     return corr
 
 
-def compute_mu(all_runs, metric):
+def compute_mu(metrics_for_all_runs, metric):
     mu = {}
 
-    steps = sorted(all_runs[0].keys())
+    steps = sorted(metrics_for_all_runs[0].keys())
 
     for step in steps:
-        p = all_runs[0][step]["p"]
+        p = metrics_for_all_runs[0][step]["p"]
 
-        X_vals = [all_runs[r][step][metric] for r in all_runs]
+        X_vals = [metrics_for_all_runs[r][step][metric] for r in metrics_for_all_runs]
 
         mu[p] = np.mean(X_vals)
 
     return mu
 
 
-def compute_sigma2(all_runs, metric):
+def compute_sigma2(metrics_for_all_runs, metric):
     sigma2 = {}
 
-    steps = sorted(all_runs[0].keys())
+    steps = sorted(metrics_for_all_runs[0].keys())
 
     for step in steps:
-        p = all_runs[0][step]["p"]
+        p = metrics_for_all_runs[0][step]["p"]
 
-        X_vals = [all_runs[r][step][metric] for r in all_runs]
+        X_vals = [metrics_for_all_runs[r][step][metric] for r in metrics_for_all_runs]
 
-        sigma2[p] = np.var(X_vals, ddof=1)
+        sigma2[p] = np.var(X_vals, ddof=1) if len(X_vals) > 1 else 0.0
     return sigma2
 
 
@@ -760,19 +1067,23 @@ def safe_percentile(values: List[float], q: float) -> Optional[float]:
 
 
 def get_baseline_segment(
-    metrics: List[Dict],
+    metrics,
     baseline_fraction: float = 0.2,
     min_points: int = 5
-) -> List[Dict]:
+):
     if not metrics:
         return []
 
-    n = len(metrics)
+    if isinstance(metrics, dict):
+        rows = [metrics[k] for k in sorted(metrics.keys())]
+    else:
+        rows = list(metrics)
+
+    n = len(rows)
     cutoff = max(min_points, int(math.ceil(n * baseline_fraction)))
     cutoff = min(cutoff, n)
-    return list(metrics.values())[:cutoff]
-    # return metrics[:cutoff]
 
+    return rows[:cutoff]
 
 def estimate_indicator_thresholds(
     metrics: List[Dict],
