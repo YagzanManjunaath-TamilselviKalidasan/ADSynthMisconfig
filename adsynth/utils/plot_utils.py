@@ -6,7 +6,9 @@ import matplotlib.pyplot as plt
 import plotly.graph_objects as go
 import plotly.io as pio
 import numpy as np
-
+import os
+import pandas as pd
+import duckdb
 from adsynth.utils.ablation_study_utils import add_rise_period_metrics
 
 
@@ -385,7 +387,6 @@ from collections import defaultdict
 import pandas as pd
 import matplotlib.pyplot as plt
 
-
 import math
 import tempfile
 from collections import defaultdict
@@ -763,6 +764,7 @@ def export_metrics_to_excel(metrics_data, filename, x_axis="step", metadata=None
         )
         chart.set_y_axis({"name": "Normalised value (0-1)", "min": 0, "max": 1})
         ws.insert_chart("H2", chart, {"x_scale": 1.7, "y_scale": 1.4})
+
     def write_rise_sheet(writer, workbook, df_main, run_id, x_plot_col, header_fmt):
         rise_cols = [c for c in [
             x_plot_col,
@@ -795,7 +797,8 @@ def export_metrics_to_excel(metrics_data, filename, x_axis="step", metadata=None
         ws.insert_chart("S2", streak_chart, {"x_scale": 1.5, "y_scale": 1.2})
 
         if "X" in df_rise.columns:
-            xp_cols = ["X"] + [c for c in ["rise_streak_HCI", "rise_streak_CSM", "rise_streak_TBS"] if c in df_rise.columns]
+            xp_cols = ["X"] + [c for c in ["rise_streak_HCI", "rise_streak_CSM", "rise_streak_TBS"] if
+                               c in df_rise.columns]
             df_xp = df_rise[xp_cols].copy()
 
             scatter = make_scatter_chart(
@@ -989,6 +992,8 @@ def export_metrics_to_excel(metrics_data, filename, x_axis="step", metadata=None
             write_metric_sheets(writer, workbook, df_main, run_id, x_plot_col, header_fmt)
 
     print(f"Dataset exported to {filename}")
+
+
 def insert_correlation_heatmap(workbook, worksheet, df, cell="J2", title="Correlation Heatmap"):
     import tempfile
     import os
@@ -1026,5 +1031,249 @@ def insert_correlation_heatmap(workbook, worksheet, df, cell="J2", title="Correl
 
     worksheet.insert_image(cell, tmp_path)
     return tmp_path
+def insert_correlation_block(ws, workbook, df, start_row):
+    import pandas as pd
+    import numpy as np
 
+    features = [
+        "HCI", "CSM", "TBS",
+        "rise_streak_HCI", "rise_streak_CSM", "rise_streak_TBS"
+    ]
+
+    target_col = "J_k5_z2p0"
+    rows = []
+
+    if target_col not in df.columns:
+        return start_row
+
+    for f in features:
+        if f not in df.columns:
+            continue
+
+        sub = df[[f, target_col]].dropna()
+        if len(sub) < 2:
+            continue
+
+        rows.append({
+            "feature": f,
+            "target": target_col,
+            "pearson": sub[f].corr(sub[target_col], method="pearson"),
+            "spearman": sub[f].corr(sub[target_col], method="spearman"),
+        })
+
+    if not rows:
+        return start_row
+
+    corr_df = pd.DataFrame(rows)
+
+    # write table
+    for col_idx, col in enumerate(corr_df.columns):
+        ws.write(start_row, col_idx, col)
+        for r in range(len(corr_df)):
+            ws.write(start_row + 1 + r, col_idx, corr_df.iloc[r, col_idx])
+
+    # chart: correlation vs jump label
+    chart = workbook.add_chart({"type": "column"})
+
+    base_row = start_row + 1
+    feature_col = corr_df.columns.get_loc("feature")
+    pearson_col = corr_df.columns.get_loc("pearson")
+    spearman_col = corr_df.columns.get_loc("spearman")
+    n = len(corr_df)
+
+    chart.add_series({
+        "name": "pearson",
+        "categories": ["analysis", base_row, feature_col, base_row + n - 1, feature_col],
+        "values": ["analysis", base_row, pearson_col, base_row + n - 1, pearson_col],
+    })
+
+    chart.add_series({
+        "name": "spearman",
+        "categories": ["analysis", base_row, feature_col, base_row + n - 1, feature_col],
+        "values": ["analysis", base_row, spearman_col, base_row + n - 1, spearman_col],
+    })
+
+    chart.set_title({"name": "Correlation with Jump Label"})
+    chart.set_x_axis({"name": "Feature"})
+    chart.set_y_axis({"name": "Correlation", "min": -1, "max": 1})
+
+    ws.insert_chart(start_row, 8, chart, {
+        "x_scale": 2.0,
+        "y_scale": 1.2
+    })
+
+    return start_row + len(corr_df) + 5
+
+def export_single_run_analysis_sheet(metrics_dict, filename, metadata=None):
+    import pandas as pd
+
+    # ---------- Prepare dataframe ----------
+    df = pd.DataFrame.from_dict(metrics_dict, orient="index")
+    if "step" in df.columns:
+        df = df.drop(columns=["step"])
+    df = df.sort_index().reset_index().rename(columns={"index": "step"})
+
+    plot_cols = [
+        "X", "HCI", "CSM", "TBS",
+        "rise_streak_HCI", "rise_streak_CSM", "rise_streak_TBS",
+        "J_k5_z2p0", "step"
+    ]
+
+    for col in plot_cols:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+    if "J_k5_z2p0" not in df.columns:
+        raise ValueError("jump_label column required")
+
+    # ---------- Excel writer ----------
+    with pd.ExcelWriter(filename, engine="xlsxwriter") as writer:
+        workbook = writer.book
+
+        header_fmt = workbook.add_format({
+            "bold": True,
+            "bg_color": "#D9EAF7",
+            "border": 1,
+        })
+
+        sheet_name = "analysis"
+        df.to_excel(writer, sheet_name=sheet_name, index=False)
+        ws = writer.sheets[sheet_name]
+
+        # column widths
+        for i, col in enumerate(df.columns):
+            ws.write(0, i, col, header_fmt)
+            ws.set_column(i, i, 16)
+
+        # helpers
+        def make_line_chart(x_col, y_cols, title):
+            chart = workbook.add_chart({"type": "line"})
+            x_idx = df.columns.get_loc(x_col)
+            nrows = len(df)
+
+            for y in y_cols:
+                if y not in df.columns:
+                    continue
+                y_idx = df.columns.get_loc(y)
+                chart.add_series({
+                    "name": [sheet_name, 0, y_idx],
+                    "categories": [sheet_name, 1, x_idx, nrows, x_idx],
+                    "values": [sheet_name, 1, y_idx, nrows, y_idx],
+                })
+
+            chart.set_title({"name": title})
+            chart.set_x_axis({"name": x_col})
+            return chart
+
+        def make_boxplot(feature):
+            if feature not in df.columns:
+                return None
+
+            # split by jump label
+            df0 = df[df["J_k5_z2p0"] == 0][feature].dropna()
+            df1 = df[df["J_k5_z2p0"] == 1][feature].dropna()
+
+            if len(df0) == 0 or len(df1) == 0:
+                return None
+
+            tmp = pd.DataFrame({
+                f"{feature}_class0": df0,
+                f"{feature}_class1": df1
+            })
+
+            tmp_sheet = f"{feature}_box"
+            tmp.to_excel(writer, sheet_name=tmp_sheet, index=False)
+
+            chart = workbook.add_chart({"type": "column"})
+
+            for i, col in enumerate(tmp.columns):
+                chart.add_series({
+                    "name": col,
+                    "categories": [tmp_sheet, 1, i, len(tmp), i],
+                    "values": [tmp_sheet, 1, i, len(tmp), i],
+                })
+
+            chart.set_title({"name": f"{feature} by jump_label"})
+            return chart
+
+        # ---------- Insert charts ----------
+
+        CHART_X_SCALE = 2.2
+        CHART_Y_SCALE = 1.1
+        CHART_COL = 0
+        ROW_GAP = 20
+
+        row_cursor = len(df) + 3
+
+        # 1. X vs step
+        chart = make_line_chart("step", ["X"], "X vs step")
+        if chart is not None:
+            ws.insert_chart(row_cursor, CHART_COL, chart, {
+                "x_scale": CHART_X_SCALE,
+                "y_scale": CHART_Y_SCALE
+            })
+            row_cursor += ROW_GAP
+
+        # 2. jump_label + X vs step
+        chart = make_line_chart("step", ["X", "J_k5_z2p0"], "X & jump_label vs step")
+        if chart is not None:
+            ws.insert_chart(row_cursor, CHART_COL, chart, {
+                "x_scale": CHART_X_SCALE,
+                "y_scale": CHART_Y_SCALE
+            })
+            row_cursor += ROW_GAP
+
+        # 3. HCI + jump label
+        chart = make_line_chart("step", ["HCI", "J_k5_z2p0"], "HCI & jump_label")
+        if chart is not None:
+            ws.insert_chart(row_cursor, CHART_COL, chart, {
+                "x_scale": CHART_X_SCALE,
+                "y_scale": CHART_Y_SCALE
+            })
+            row_cursor += ROW_GAP
+
+        # 4. CSM + jump label
+        chart = make_line_chart("step", ["CSM", "J_k5_z2p0"], "CSM & jump_label")
+        if chart is not None:
+            ws.insert_chart(row_cursor, CHART_COL, chart, {
+                "x_scale": CHART_X_SCALE,
+                "y_scale": CHART_Y_SCALE
+            })
+            row_cursor += ROW_GAP
+
+        # 5. TBS + jump label
+        chart = make_line_chart("step", ["TBS", "J_k5_z2p0"], "TBS & jump_label")
+        if chart is not None:
+            ws.insert_chart(row_cursor, CHART_COL, chart, {
+                "x_scale": CHART_X_SCALE,
+                "y_scale": CHART_Y_SCALE
+            })
+            row_cursor += ROW_GAP
+
+        # 6. rise streak plots
+        for k in ["HCI", "CSM", "TBS"]:
+            col = f"rise_streak_{k}"
+            if col in df.columns:
+                chart = make_line_chart("step", [col, "J_k5_z2p0"], f"{col} & jump_label")
+                if chart is not None:
+                    ws.insert_chart(row_cursor, CHART_COL, chart, {
+                        "x_scale": CHART_X_SCALE,
+                        "y_scale": CHART_Y_SCALE
+                    })
+                    row_cursor += ROW_GAP
+
+        # boxplots
+        box_features = ["HCI", "CSM", "TBS",
+                        "rise_streak_HCI", "rise_streak_CSM", "rise_streak_TBS"]
+
+        for f in box_features:
+            chart = make_boxplot(f)
+            if chart is not None:
+                ws.insert_chart(row_cursor, CHART_COL, chart, {
+                    "x_scale": CHART_X_SCALE,
+                    "y_scale": CHART_Y_SCALE
+                })
+                row_cursor += ROW_GAP
+        row_cursor += 2
+        row_cursor = insert_correlation_block(ws, workbook, df, row_cursor)
+    print(f"Exported to {filename}")
 
