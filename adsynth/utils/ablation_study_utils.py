@@ -1170,3 +1170,75 @@ def add_rise_period_metrics(metrics_dict, metric_keys):
             prev_vals[k] = curr
 
     return metrics_dict
+
+import os
+import pandas as pd
+
+def rows_from_run_metrics(
+    run_metrics: Dict,
+    itr: int,
+    base_filename: str,
+    seed_number: int,
+    injection_type: str = "session",
+    mode: str = "isolated",
+):
+    rows = []
+    for step in sorted(run_metrics.keys()):
+        row = dict(run_metrics[step])
+        row["run"] = itr
+        row["seed_number"] = seed_number
+        row["graph_base"] = base_filename
+        row["injection_type"] = injection_type
+        row["mode"] = mode
+        row["step"] = step
+        rows.append(row)
+    return rows
+
+def save_iteration_csv(rows, out_dir, base_filename, itr):
+    os.makedirs(out_dir, exist_ok=True)
+    df = pd.DataFrame(rows)
+    out_path = os.path.join(out_dir, f"session_{base_filename}_itr_{itr}.csv")
+    df.to_csv(out_path, index=False)
+    return df, out_path
+
+def save_master_csv(all_rows, out_dir, base_filename):
+    os.makedirs(out_dir, exist_ok=True)
+    df = pd.DataFrame(all_rows)
+    out_path = os.path.join(out_dir, f"session_{base_filename}_all_runs.csv")
+    df.to_csv(out_path, index=False)
+    return df, out_path
+
+def compute_rise_metrics(metrics_dict, metric_keys=("HCI", "CSM", "TBS")):
+    steps = sorted(metrics_dict.keys())
+
+    streaks = {k: 0 for k in metric_keys}
+    totals = {k: 0 for k in metric_keys}
+    prev_vals = {k: None for k in metric_keys}
+
+    for step in steps:
+        row = metrics_dict[step]
+
+        for k in metric_keys:
+            curr = row.get(k)
+
+            if not is_valid_number(curr):
+                row[f"rise_flag_{k}"] = None
+                row[f"rise_streak_{k}"] = None
+                row[f"rise_total_{k}"] = totals[k]
+                continue
+
+            prev = prev_vals[k]
+
+            if is_valid_number(prev) and curr > prev:
+                streaks[k] += 1
+                totals[k] += 1
+                row[f"rise_flag_{k}"] = 1
+            else:
+                streaks[k] = 0
+                row[f"rise_flag_{k}"] = 0
+
+            row[f"rise_streak_{k}"] = streaks[k]
+            row[f"rise_total_{k}"] = totals[k]
+            prev_vals[k] = curr
+
+    return metrics_dict
