@@ -2,6 +2,10 @@ import logging
 import math
 import re
 from typing import List, Optional, Dict
+from sklearn.model_selection import train_test_split
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import roc_curve, auc
+import matplotlib.pyplot as plt
 
 import numpy as np
 import pandas as pd
@@ -128,12 +132,110 @@ def compute_jump_labels(metrics: List[Dict]) -> List[Dict]:
 
     return out
 
+
+import numpy as np
+from typing import List, Dict
+
+
+def compute_jump_labels_standardized(
+    metrics: List[Dict],
+    ks=(5, 10),
+    z_threshold: float = 2.0,
+    robust: bool = True,
+) -> List[Dict]:
+    """
+    Compute future jump scores using standardized future exposure change.
+
+    For each k:
+        future_delta_k = X_{i+k} - X_i
+        Z_k = standardized jump score within this run / condition
+        J_k*_z* = 1 if standardized score >= z_threshold else 0
+
+    If robust=True:
+        center = median(delta_k)
+        scale  = IQR(delta_k) / 1.349   # robust std proxy
+    Else:
+        center = mean(delta_k)
+        scale  = std(delta_k)
+    """
+
+    out = [dict(row) for row in metrics]
+    n = len(out)
+
+    for k in ks:
+        valid_deltas = []
+
+        # Collect all valid future deltas for this horizon
+        for i in range(n):
+            if i + k >= n:
+                continue
+
+            x_i = out[i].get("X")
+            x_future = out[i + k].get("X")
+
+            if is_valid_number(x_i) and is_valid_number(x_future):
+                valid_deltas.append(float(x_future) - float(x_i))
+
+        delta_col = f"future_delta_k{k}"
+        z_col = f"Z_k{k}"
+        label_col = f"J_k{k}_z{str(z_threshold).replace('.', 'p')}"
+
+        # No valid deltas
+        if not valid_deltas:
+            for i in range(n):
+                out[i][delta_col] = None
+                out[i][z_col] = None
+                out[i][label_col] = None
+            continue
+
+        arr = np.asarray(valid_deltas, dtype=float)
+
+        if robust:
+            center = float(np.median(arr))
+            q1, q3 = np.percentile(arr, [25, 75])
+            iqr = float(q3 - q1)
+
+            # Convert IQR to std-like scale
+            scale = (iqr / 1.349) if iqr > 0 else float(np.std(arr, ddof=0))
+        else:
+            center = float(np.mean(arr))
+            scale = float(np.std(arr, ddof=0))
+
+        # Fill rows
+        for i in range(n):
+            if i + k >= n:
+                out[i][delta_col] = None
+                out[i][z_col] = None
+                out[i][label_col] = None
+                continue
+
+            x_i = out[i].get("X")
+            x_future = out[i + k].get("X")
+
+            if not is_valid_number(x_i) or not is_valid_number(x_future):
+                out[i][delta_col] = None
+                out[i][z_col] = None
+                out[i][label_col] = None
+                continue
+
+            delta = float(x_future) - float(x_i)
+            out[i][delta_col] = delta
+
+            if scale is None or not np.isfinite(scale) or scale == 0:
+                z_val = 0.0
+            else:
+                z_val = (delta - center) / scale
+
+            out[i][z_col] = z_val
+            out[i][label_col] = int(z_val >= z_threshold)
+
+    return out
 def prepare_prediction_pipeline_for_iteration(
         run_metrics: Dict,
         itr: int,
         baseline_fraction: float = 0.2,
         min_points: int = 5,
-        export_csv: bool = True,
+        export_csv: bool = False,
 ):
     # Convert step-keyed dict to sorted row list
     rows = []
@@ -153,7 +255,7 @@ def prepare_prediction_pipeline_for_iteration(
     metrics_with_alarms = apply_indicator_alarms(rows, thresholds)
 
     # Future jump labels
-    metrics_with_labels = compute_jump_labels(metrics_with_alarms)
+    metrics_with_labels = compute_jump_labels_standardized(metrics_with_alarms)
 
     if export_csv:
         export_metrics_to_csv(
@@ -201,6 +303,8 @@ def calc_thresholds_and_jump_labels_for_iteration(
 
 
 
+
+# Old code starts
 def build_prediction_dataset(
         metrics: List[Dict],
         label_name: str,
