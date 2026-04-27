@@ -13,6 +13,8 @@ import getpass
 import cmd
 import logging
 from calendar import error
+from pathlib import Path
+
 from scipy.stats import t
 from collections import defaultdict
 import uuid
@@ -88,7 +90,8 @@ from timeit import default_timer as timer
 from datetime import datetime
 
 from adsynth.utils.plot_utils import plot_plot_chart, plot_box_plot_using_plotty, plot_chart_using_plotly, plot_metrics, \
-    export_metrics_to_excel, export_single_run_analysis_sheet, export_single_run_to_duckdb_and_csv
+    export_metrics_to_excel, export_single_run_analysis_sheet, \
+    export_experiment_to_duckdb_and_csv
 from adsynth.utils.prediction_utils import calc_thresholds_and_jump_labels, add_high_exposure_label, \
     misconfig_metrics_to_df, add_target_from_x, run_logreg_all_iterations_to_excel, \
     calc_thresholds_and_jump_labels_for_iteration
@@ -100,8 +103,6 @@ import matplotlib.pyplot as plt
 
 import numpy as np
 import pandas as pd
-
-
 
 
 def delete_neo4j_data(session):
@@ -260,7 +261,7 @@ class MainMenu(cmd.Cmd):
         self.dbname = None
         self.misconfig_enabled = True
         # R realizations - iterations as of now
-        self.R = 1
+        self.R = 20
         cmd.Cmd.__init__(self)
         logging.basicConfig(
             filename="app.log",
@@ -1144,6 +1145,7 @@ class MainMenu(cmd.Cmd):
         plt.show()
 
         return pd.DataFrame(results).T
+
     def session_injection(self, args):
         if len(NODES) == 0:
             print("====================================================================")
@@ -1183,7 +1185,7 @@ class MainMenu(cmd.Cmd):
                                                                                         self.driver.session(),
                                                                                         misconfig_session_count,
                                                                                         self.level, self.parameters)
-                # if misconfig_session_count % 600 == 0:
+
                 networkx_graph = create_networkx_graph()
                 find_user_count_with_path_to_DA(networkx_graph, high_value_target_name, misconfig_session_count,
                                                 misconfig_growth_metrics)
@@ -1200,7 +1202,8 @@ class MainMenu(cmd.Cmd):
                     misconfig_growth_metrics[misconfig_session_count]["reachable_comps_count"],
                     num_computers)
 
-                indicators_hci_csm_tbs(EXP_EDGES, misconfig_growth_metrics, misconfig_session_count, num_users,DB.TOTAL_T0_USERS,{2},
+                indicators_hci_csm_tbs(EXP_EDGES, misconfig_growth_metrics, misconfig_session_count, num_users,
+                                       DB.TOTAL_T0_USERS, {2},
                                        1.0)
 
                 pbcc_result = pbcc_bounded_bfs_tier2_computers_debug(
@@ -1210,11 +1213,8 @@ class MainMenu(cmd.Cmd):
                 )
 
                 print("PBCC:", pbcc_result["pbcc"])
-                print("Successful mixed paths:", pbcc_result["successful_paths"])
-                print("Path type counts:", pbcc_result["path_type_counts"])
-
-                # for fh, info in pbcc_result["foothold_debug"].items():
-                #     print(fh, "->", info["reason"], info["reached_target_by_type"])
+                # print("Successful mixed paths:", pbcc_result["successful_paths"])
+                # print("Path type counts:", pbcc_result["path_type_counts"])
 
                 misconfig_growth_metrics[misconfig_session_count]["PBCC"] = pbcc_result["pbcc"]
 
@@ -1236,26 +1236,6 @@ class MainMenu(cmd.Cmd):
 
             number_of_misconfigs = sorted(misconfig_growth_metrics.keys())
 
-
-            #
-            # HCI = []
-            # deltaX = []
-            #
-            # for m in misconfig_growth_metrics.values():
-            #     if "delta_X" in m:
-            #         HCI.append(m["HCI"])
-            #         deltaX.append(m["delta_X"])
-            #
-            # if itr == self.R - 1 and not self.skip_plots:
-            #     plot_plot_chart(
-            #         x_values=HCI,
-            #         y_values=deltaX,
-            #         x_label="HCI",
-            #         y_label="ΔX",
-            #         title="Hub Concurrency vs Exposure Jump",
-            #         additional_info={"itr": itr},
-            #         plot_type="scatter"
-            #     )
             misconfig_growth_metrics = compute_delta_X(misconfig_growth_metrics)
 
             misconfig_growth_metrics = compute_rise_metrics(
@@ -1282,22 +1262,11 @@ class MainMenu(cmd.Cmd):
                 mode="isolated",
             )
 
-            run_df, run_csv_path = save_iteration_csv(
-                run_rows,
-                out_dir="analysis/csv",
-                base_filename=base_filename,
-                itr=itr,
-            )
+            # run_df, run_csv_path = save_iteration_csv(run_rows, out_dir="analysis/csv", base_filename=base_filename,itr=itr, )
+            # logging.info("Saved iteration CSV: %s", run_csv_path)
 
-            logging.info("Saved iteration CSV: %s", run_csv_path)
             # clear_exp_neo4j_db(self.driver.session())
             # update_graph_db_with_temp_file(self.driver.session(), f"misconfig-session-temp={itr}")
-            # tabulate_experiment_results(self.driver.session(),misconfig_growth_metrics)
-            # if itr == 0 and not self.skip_plots:
-
-            # Plotting in output excel
-            # if itr == self.R-1 :
-            #     plot_metrics(num_users, num_computers, num_misconfig, base_filename, misconfig_growth_metrics)
 
         all_rows = []
         for itr in sorted(misconfig_metrics_per_itr.keys()):
@@ -1338,7 +1307,6 @@ class MainMenu(cmd.Cmd):
 
         steps = sorted(run_metrics.keys())
 
-
         logging.info("====================================================================")
 
         if not self.skip_plots:
@@ -1372,39 +1340,57 @@ class MainMenu(cmd.Cmd):
         initial_misconfig = "Y" if self.misconfig_enabled else "N"
 
         chart_metadata["initial_misconfig"] = initial_misconfig
-
-        xl_filename = f"analysis/misconfig_metrics_{base_filename}_{initial_misconfig}_{self.seed_number}.xlsx"
+        experiment_id = f"exp_session_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        export_experiment_to_duckdb_and_csv(
+            misconfig_metrics_per_itr=misconfig_metrics_per_itr,
+            mu=mu,
+            sigma2=sigma2,
+            p_star=p_star,
+            duckdb_path=str(Path.home()/"adsynth_metrics.duckdb"),
+            main_csv_path=f"analysis/csv/master_{base_filename}.csv",
+            experiment_id=experiment_id,
+            experiment_name="Session misconfiguration experiment",
+            base_graph_id=base_filename,
+            base_graph_name=base_filename,
+            regime_id=self.level,
+            seed_number=self.seed_number,
+            injection_type="session",
+            injection_schedule_name="session_injection",
+            initial_misconfig=self.misconfig_enabled,
+            mode="isolated",
+        )
 
         # Commenting for roc check
         # export_metrics_to_excel(misconfig_metrics_per_itr[0], xl_filename, x_axis="step", metadata=chart_metadata)
-        export_single_run_analysis_sheet(misconfig_metrics_per_itr[0],xl_filename)
+
+        # xl_filename = f"analysis/misconfig_metrics_{base_filename}_{initial_misconfig}_{self.seed_number}.xlsx"
+        # export_single_run_analysis_sheet(misconfig_metrics_per_itr[0], xl_filename)
 
         with open(
                 f"/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/generated_datasets/mgm_session_{base_filename}.json",
                 "w") as f:
             json.dump(misconfig_metrics_per_itr, f, indent=4)
 
-
-# Skipping log reg
-#         df_summary, df_coefs, df_coef_wide, df_skipped = run_logreg_all_iterations_to_excel(
-#             misconfig_metrics_per_itr,
-#             output_excel="analysis/logreg_all_iterations.xlsx",
-#             feature_cols=["HCI", "CSM", "TBS"],
-#             x_col="X",
-#             quantile=0.8,
-#         )
-#
-#         df_summary, df_coefs, df_coef_wide, df_skipped = run_logreg_all_iterations_to_excel(
-#             misconfig_metrics_per_itr,
-#             output_excel="analysis/logreg_all_iterations_rise.xlsx",
-#             feature_cols=[
-#                 "HCI", "CSM", "TBS",
-#                 "delta_HCI", "delta_CSM", "delta_TBS",
-#                 "rise_streak_HCI", "rise_streak_CSM", "rise_streak_TBS",
-#             ],
-#             x_col="X",
-#             quantile=0.8,
-#         )
+    # Skipping log reg
+    #         df_summary, df_coefs, df_coef_wide, df_skipped = run_logreg_all_iterations_to_excel(
+    #             misconfig_metrics_per_itr,
+    #             output_excel="analysis/logreg_all_iterations.xlsx",
+    #             feature_cols=["HCI", "CSM", "TBS"],
+    #             x_col="X",
+    #             quantile=0.8,
+    #         )
+    #
+    #         df_summary, df_coefs, df_coef_wide, df_skipped = run_logreg_all_iterations_to_excel(
+    #             misconfig_metrics_per_itr,
+    #             output_excel="analysis/logreg_all_iterations_rise.xlsx",
+    #             feature_cols=[
+    #                 "HCI", "CSM", "TBS",
+    #                 "delta_HCI", "delta_CSM", "delta_TBS",
+    #                 "rise_streak_HCI", "rise_streak_CSM", "rise_streak_TBS",
+    #             ],
+    #             x_col="X",
+    #             quantile=0.8,
+    #         )
 
     def indi_permission_injection(self, args):
         if len(NODES) == 0:

@@ -9,6 +9,9 @@ import numpy as np
 import os
 import pandas as pd
 import duckdb
+
+import pandas as pd
+import duckdb
 from adsynth.utils.ablation_study_utils import add_rise_period_metrics
 
 
@@ -1277,3 +1280,337 @@ def export_single_run_analysis_sheet(metrics_dict, filename, metadata=None):
         row_cursor = insert_correlation_block(ws, workbook, df, row_cursor)
     print(f"Exported to {filename}")
 
+
+# =========================
+# Global DuckDB export config
+# =========================
+
+DUCKDB_PATH = "analysis/adsynth_metrics.duckdb"
+MAIN_CSV_PATH = "analysis/main_metric_steps.csv"
+
+DEFAULT_EXPERIMENT_ID = "exp_adsynth_001"
+DEFAULT_EXPERIMENT_NAME = "ADSynth misconfiguration experiment"
+DEFAULT_BASE_GRAPH_ID = "base_graph_001"
+DEFAULT_BASE_GRAPH_NAME = None
+DEFAULT_REGIME_ID = "default_regime"
+
+
+def export_experiment_to_duckdb_and_csv(
+    misconfig_metrics_per_itr,
+    mu,
+    sigma2,
+    p_star,
+    duckdb_path=DUCKDB_PATH,
+    main_csv_path=MAIN_CSV_PATH,
+
+    experiment_id=DEFAULT_EXPERIMENT_ID,
+    experiment_name=DEFAULT_EXPERIMENT_NAME,
+    base_graph_id=DEFAULT_BASE_GRAPH_ID,
+    base_graph_name=DEFAULT_BASE_GRAPH_NAME,
+    regime_id=DEFAULT_REGIME_ID,
+
+    seed_number=None,
+    injection_type="session",
+    injection_schedule_name="random_injection",
+    initial_misconfig=False,
+    mode="isolated",
+    notes=None,
+):
+
+    os.makedirs(os.path.dirname(duckdb_path), exist_ok=True)
+    os.makedirs(os.path.dirname(main_csv_path), exist_ok=True)
+    print("Duck db path "+duckdb_path)
+    expected_cols = [
+        "experiment_id", "iteration_id", "step",
+        "reachable_users", "new_reachable_users",
+        "reachable_comps", "new_reachable_comps_names", "reachable_comps_names",
+        "reachable_users_count", "reachable_comps_count",
+        "p", "X", "X_users", "X_comps",
+        "HCI", "CSM", "TBS", "PBCC", "delta_X",
+        "rise_flag_HCI", "rise_streak_HCI", "rise_total_HCI",
+        "rise_flag_CSM", "rise_streak_CSM", "rise_total_CSM",
+        "rise_flag_TBS", "rise_streak_TBS", "rise_total_TBS",
+        "A_HCI", "A_CSM", "A_TBS", "A_PBCC",
+        "future_delta_k5", "Z_k5", "J_k5_z2p0",
+        "future_delta_k10", "Z_k10", "J_k10_z2p0",
+    ]
+
+    numeric_cols = [
+        "step", "reachable_users_count", "reachable_comps_count",
+        "p", "X", "X_users", "X_comps",
+        "HCI", "CSM", "TBS", "PBCC", "delta_X",
+        "rise_flag_HCI", "rise_streak_HCI", "rise_total_HCI",
+        "rise_flag_CSM", "rise_streak_CSM", "rise_total_CSM",
+        "rise_flag_TBS", "rise_streak_TBS", "rise_total_TBS",
+        "A_HCI", "A_CSM", "A_TBS", "A_PBCC",
+        "future_delta_k5", "Z_k5", "J_k5_z2p0",
+        "future_delta_k10", "Z_k10", "J_k10_z2p0",
+    ]
+
+
+    all_dfs = []
+
+    for itr, metrics_dict in sorted(misconfig_metrics_per_itr.items()):
+        df = pd.DataFrame.from_dict(metrics_dict, orient="index")
+
+        if "step" in df.columns:
+            df = df.drop(columns=["step"])
+
+        df = df.sort_index().reset_index().rename(columns={"index": "step"})
+
+        iteration_id = f"iter_{itr}"
+
+        df.insert(0, "iteration_id", iteration_id)
+        df.insert(0, "experiment_id", experiment_id)
+
+        for col in expected_cols:
+            if col not in df.columns:
+                df[col] = None
+
+        df = df[expected_cols]
+
+        for col in numeric_cols:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
+        all_dfs.append(df)
+
+    if not all_dfs:
+        raise ValueError("No iterations found in misconfig_metrics_per_itr")
+
+    master_df = pd.concat(all_dfs, ignore_index=True)
+
+
+    master_df.to_csv(main_csv_path, index=False)
+
+
+    summary_rows = []
+
+    all_p_values = sorted(set(mu.keys()) | set(sigma2.keys()))
+
+    for p in all_p_values:
+        summary_rows.append({
+            "experiment_id": experiment_id,
+            "p": p,
+            "mu_X": mu.get(p),
+            "sigma2_X": sigma2.get(p),
+            "is_p_star": p == p_star,
+            "p_star": p_star,
+        })
+
+    summary_df = pd.DataFrame(summary_rows)
+
+    # -------------------------
+    # DuckDB export
+    # -------------------------
+    con = duckdb.connect(duckdb_path)
+
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS experiments (
+            experiment_id VARCHAR PRIMARY KEY,
+            experiment_name VARCHAR,
+            base_graph_id VARCHAR,
+            base_graph_name VARCHAR,
+            regime_id VARCHAR,
+            injection_type VARCHAR,
+            mode VARCHAR,
+            seed_number INTEGER,
+            initial_misconfig BOOLEAN,
+            description VARCHAR,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+    """)
+
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS experiment_iterations (
+            experiment_id VARCHAR NOT NULL,
+            iteration_id VARCHAR NOT NULL,
+            seed INTEGER,
+            injection_schedule_name VARCHAR,
+            initial_misconfig BOOLEAN,
+            notes VARCHAR,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (experiment_id, iteration_id)
+        );
+    """)
+
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS metric_steps (
+            experiment_id VARCHAR NOT NULL,
+            iteration_id VARCHAR NOT NULL,
+            step INTEGER NOT NULL,
+
+            reachable_users VARCHAR,
+            new_reachable_users VARCHAR,
+            reachable_comps VARCHAR,
+            new_reachable_comps_names VARCHAR,
+            reachable_comps_names VARCHAR,
+
+            reachable_users_count INTEGER,
+            reachable_comps_count INTEGER,
+
+            p DOUBLE,
+            X DOUBLE,
+            X_users DOUBLE,
+            X_comps DOUBLE,
+
+            HCI DOUBLE,
+            CSM DOUBLE,
+            TBS DOUBLE,
+            PBCC DOUBLE,
+            delta_X DOUBLE,
+
+            rise_flag_HCI INTEGER,
+            rise_streak_HCI INTEGER,
+            rise_total_HCI INTEGER,
+
+            rise_flag_CSM INTEGER,
+            rise_streak_CSM INTEGER,
+            rise_total_CSM INTEGER,
+
+            rise_flag_TBS INTEGER,
+            rise_streak_TBS INTEGER,
+            rise_total_TBS INTEGER,
+
+            A_HCI DOUBLE,
+            A_CSM DOUBLE,
+            A_TBS DOUBLE,
+            A_PBCC DOUBLE,
+
+            future_delta_k5 DOUBLE,
+            Z_k5 DOUBLE,
+            J_k5_z2p0 INTEGER,
+
+            future_delta_k10 DOUBLE,
+            Z_k10 DOUBLE,
+            J_k10_z2p0 INTEGER,
+
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+            PRIMARY KEY (experiment_id, iteration_id, step)
+        );
+    """)
+
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS experiment_summary_stats (
+            experiment_id VARCHAR NOT NULL,
+            p DOUBLE NOT NULL,
+            mu_X DOUBLE,
+            sigma2_X DOUBLE,
+            is_p_star BOOLEAN,
+            p_star DOUBLE,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (experiment_id, p)
+        );
+    """)
+
+    con.execute("""
+        INSERT OR REPLACE INTO experiments (
+            experiment_id, experiment_name, base_graph_id, base_graph_name,
+            regime_id, injection_type, mode, seed_number,
+            initial_misconfig, description
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+    """, [
+        experiment_id, experiment_name, base_graph_id, base_graph_name,
+        regime_id, injection_type, mode, seed_number,
+        initial_misconfig, notes,
+    ])
+
+    iteration_rows = []
+    for itr in sorted(misconfig_metrics_per_itr.keys()):
+        iteration_rows.append({
+            "experiment_id": experiment_id,
+            "iteration_id": f"iter_{itr}",
+            "seed": seed_number,
+            "injection_schedule_name": injection_schedule_name,
+            "initial_misconfig": initial_misconfig,
+            "notes": notes,
+        })
+
+    iteration_df = pd.DataFrame(iteration_rows)
+
+    con.register("iteration_df", iteration_df)
+    con.execute("""
+        INSERT OR REPLACE INTO experiment_iterations
+        SELECT
+            experiment_id,
+            iteration_id,
+            seed,
+            injection_schedule_name,
+            initial_misconfig,
+            notes,
+            CURRENT_TIMESTAMP
+        FROM iteration_df;
+    """)
+
+    con.register("master_df", master_df)
+    con.execute("""
+        INSERT OR REPLACE INTO metric_steps
+        SELECT
+            *,
+            CURRENT_TIMESTAMP
+        FROM master_df;
+    """)
+
+    con.register("summary_df", summary_df)
+    con.execute("""
+        INSERT OR REPLACE INTO experiment_summary_stats (
+            experiment_id,
+            p,
+            mu_X,
+            sigma2_X,
+            is_p_star,
+            p_star
+        )
+        SELECT
+            experiment_id,
+            p,
+            mu_X,
+            sigma2_X,
+            is_p_star,
+            p_star
+        FROM summary_df;
+    """)
+
+    con.execute("""
+        CREATE OR REPLACE VIEW v_metric_steps AS
+        SELECT
+            e.experiment_name,
+            e.base_graph_id,
+            e.base_graph_name,
+            e.regime_id,
+            e.injection_type,
+            e.mode,
+            e.seed_number,
+            i.injection_schedule_name,
+            i.initial_misconfig,
+            m.*
+        FROM metric_steps m
+        LEFT JOIN experiment_iterations i
+          ON m.experiment_id = i.experiment_id
+         AND m.iteration_id = i.iteration_id
+        LEFT JOIN experiments e
+          ON m.experiment_id = e.experiment_id;
+    """)
+
+    con.execute("""
+        CREATE OR REPLACE VIEW v_experiment_summary_stats AS
+        SELECT
+            e.experiment_name,
+            e.base_graph_id,
+            e.base_graph_name,
+            e.regime_id,
+            e.injection_type,
+            e.mode,
+            s.*
+        FROM experiment_summary_stats s
+        LEFT JOIN experiments e
+          ON s.experiment_id = e.experiment_id;
+    """)
+
+    con.close()
+
+    print(f"Exported all runs to DuckDB: {duckdb_path}")
+    print(f"Exported master CSV: {main_csv_path}")
+    print(f"Metric rows exported: {len(master_df)}")
+    print(f"Summary rows exported: {len(summary_df)}")
