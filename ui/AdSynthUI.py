@@ -28,7 +28,7 @@ class ADSynthUI:
         self.db_user_var = tk.StringVar(value=self.menu.username)
         self.db_pass_var = tk.StringVar(value="admin1234")
         self.domain_var = tk.StringVar(value=self.menu.domain)
-        self.misconfig_var = tk.BooleanVar(value=True)
+        self.misconfig_var = tk.BooleanVar(value=False)
         self.random_seed = tk.IntVar(value=1)
 
         self._build_ui()
