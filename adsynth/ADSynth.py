@@ -66,7 +66,8 @@ from adsynth.templates.groups import get_departments_list
 from adsynth.utils.ablation_study_utils import get_baseline_from_AD, indicators_hci_csm_tbs, exposure_X, exposure_parts, \
     populate_node_tiers, pbcc_bounded_bfs_footholds, compute_mu, compute_sigma2, \
     compute_mu_sigma_ci, compute_delta_X, find_p_max_delta, compute_hub_correlation, pbcc_bounded_bfs_footholds_debug, \
-    exposure_users, exposure_computers, pbcc_bounded_bfs_tier2_computers_debug
+    exposure_users, exposure_computers, pbcc_bounded_bfs_tier2_computers_debug, rows_from_run_metrics, \
+    save_iteration_csv, save_master_csv, compute_rise_metrics
 from adsynth.utils.data import get_names_pool, get_surnames_pool, get_parameters_from_json, get_domains_pool
 from adsynth.utils.database_utils import init_experiment_state, restore_experiment_state, save_experiment_state, \
     clear_exp_neo4j_db, update_graph_db_with_temp_file, save_all_experiment_states_to_json, load_graph_from_file, \
@@ -87,10 +88,20 @@ from timeit import default_timer as timer
 from datetime import datetime
 
 from adsynth.utils.plot_utils import plot_plot_chart, plot_box_plot_using_plotty, plot_chart_using_plotly, plot_metrics, \
-    export_metrics_to_excel
+    export_metrics_to_excel, export_single_run_analysis_sheet, export_single_run_to_duckdb_and_csv
 from adsynth.utils.prediction_utils import calc_thresholds_and_jump_labels, add_high_exposure_label, \
     misconfig_metrics_to_df, add_target_from_x, run_logreg_all_iterations_to_excel, \
     calc_thresholds_and_jump_labels_for_iteration
+
+from sklearn.model_selection import train_test_split
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import roc_curve, auc, precision_recall_curve, average_precision_score
+import matplotlib.pyplot as plt
+
+import numpy as np
+import pandas as pd
+
+
 
 
 def delete_neo4j_data(session):
@@ -249,7 +260,7 @@ class MainMenu(cmd.Cmd):
         self.dbname = None
         self.misconfig_enabled = True
         # R realizations - iterations as of now
-        self.R = 10
+        self.R = 1
         cmd.Cmd.__init__(self)
         logging.basicConfig(
             filename="app.log",
@@ -1023,6 +1034,116 @@ class MainMenu(cmd.Cmd):
         elif injection_type == "nesting":
             self.grp_nesting_injection(mode)
 
+    def run_model_suite_from_csv(self, csv_path, label_col="J_k5_z2p0", out_dir="analysis/plots"):
+        import os
+        import pandas as pd
+        import matplotlib.pyplot as plt
+        from sklearn.model_selection import train_test_split
+        from sklearn.linear_model import LogisticRegression
+        from sklearn.metrics import (
+            roc_curve, auc,
+            precision_recall_curve, average_precision_score
+        )
+
+        os.makedirs(out_dir, exist_ok=True)
+
+        df = pd.read_csv(csv_path)
+        base_name = os.path.splitext(os.path.basename(csv_path))[0]
+
+        model_specs = {
+            "M1": ["HCI"],
+            "M2": ["CSM"],
+            "M3": ["TBS"],
+            "M4": ["HCI", "CSM", "TBS"],
+            "M5": ["HCI", "CSM"],
+            "M6": ["HCI", "TBS"],
+            "M7": ["TBS", "CSM"],
+            "M8": ["rise_streak_HCI", "rise_streak_CSM", "rise_streak_TBS"],
+            "M9": ["HCI", "CSM", "TBS",
+                   "rise_streak_HCI", "rise_streak_CSM", "rise_streak_TBS"],
+            "M10": ["HCI", "CSM", "TBS",
+                    "rise_streak_HCI", "rise_streak_CSM", "rise_streak_TBS",
+                    "A_HCI", "A_CSM", "A_TBS", "A_PBCC"],
+        }
+
+        valid_df = df[df[label_col].notna()].copy()
+        valid_df[label_col] = valid_df[label_col].astype(int)
+
+        fig_roc, ax_roc = plt.subplots(figsize=(8, 6))
+        fig_pr, ax_pr = plt.subplots(figsize=(8, 6))
+
+        results = {}
+
+        for model_name, feature_cols in model_specs.items():
+            use_cols = [c for c in feature_cols if c in valid_df.columns]
+            if not use_cols:
+                results[model_name] = {"status": "skipped_no_features"}
+                continue
+
+            model_df = valid_df.dropna(subset=use_cols + [label_col]).copy()
+
+            if model_df.empty or model_df[label_col].nunique() < 2:
+                results[model_name] = {"status": "skipped"}
+                continue
+
+            X = model_df[use_cols].values
+            y = model_df[label_col].values
+
+            X_train, X_test, y_train, y_test = train_test_split(
+                X, y, test_size=0.3, random_state=42, stratify=y
+            )
+
+            clf = LogisticRegression(max_iter=2000)
+            clf.fit(X_train, y_train)
+
+            y_prob = clf.predict_proba(X_test)[:, 1]
+
+            # ROC
+            fpr, tpr, _ = roc_curve(y_test, y_prob)
+            roc_auc = auc(fpr, tpr)
+            ax_roc.plot(fpr, tpr, label=f"{model_name} (AUC={roc_auc:.3f})")
+
+            # PR
+            precision, recall, _ = precision_recall_curve(y_test, y_prob)
+            pr_auc = average_precision_score(y_test, y_prob)
+            ax_pr.plot(recall, precision, label=f"{model_name} (AP={pr_auc:.3f})")
+
+            results[model_name] = {
+                "features": ", ".join(use_cols),
+                "roc_auc": roc_auc,
+                "pr_auc": pr_auc,
+                "n_rows": len(model_df),
+            }
+
+        # Finalize ROC
+        ax_roc.plot([0, 1], [0, 1], linestyle="--")
+        ax_roc.set_xlabel("False Positive Rate")
+        ax_roc.set_ylabel("True Positive Rate")
+        ax_roc.set_title(f"ROC Curves ({label_col})")
+        ax_roc.legend()
+        fig_roc.tight_layout()
+
+        roc_path = os.path.join(out_dir, f"{base_name}-ROC.png")
+        fig_roc.savefig(roc_path, dpi=300, bbox_inches="tight")
+
+        # Finalize PR
+        baseline = valid_df[label_col].mean() if len(valid_df) else 0
+        ax_pr.axhline(baseline, linestyle="--", label=f"Baseline={baseline:.3f}")
+        ax_pr.set_xlabel("Recall")
+        ax_pr.set_ylabel("Precision")
+        ax_pr.set_title(f"PR Curves ({label_col})")
+        ax_pr.legend()
+        fig_pr.tight_layout()
+
+        pr_path = os.path.join(out_dir, f"{base_name}-PR.png")
+        fig_pr.savefig(pr_path, dpi=300, bbox_inches="tight")
+
+        print(f"Saved ROC plot: {roc_path}")
+        print(f"Saved PR plot: {pr_path}")
+
+        plt.show()
+
+        return pd.DataFrame(results).T
     def session_injection(self, args):
         if len(NODES) == 0:
             print("====================================================================")
@@ -1137,6 +1258,11 @@ class MainMenu(cmd.Cmd):
             #     )
             misconfig_growth_metrics = compute_delta_X(misconfig_growth_metrics)
 
+            misconfig_growth_metrics = compute_rise_metrics(
+                misconfig_growth_metrics,
+                metric_keys=("HCI", "CSM", "TBS"),
+            )
+
             metrics_with_jump_label, thresholds, datasets = calc_thresholds_and_jump_labels_for_iteration(
                 misconfig_growth_metrics,
                 itr=itr,
@@ -1147,6 +1273,23 @@ class MainMenu(cmd.Cmd):
             misconfig_metrics_per_itr[itr] = misconfig_growth_metrics
             save_experiment_state(itr)
             saveTofile(self, f"session-{itr}-{base_filename}.json")
+            run_rows = rows_from_run_metrics(
+                misconfig_growth_metrics,
+                itr=itr,
+                base_filename=base_filename,
+                seed_number=self.seed_number,
+                injection_type="session",
+                mode="isolated",
+            )
+
+            run_df, run_csv_path = save_iteration_csv(
+                run_rows,
+                out_dir="analysis/csv",
+                base_filename=base_filename,
+                itr=itr,
+            )
+
+            logging.info("Saved iteration CSV: %s", run_csv_path)
             # clear_exp_neo4j_db(self.driver.session())
             # update_graph_db_with_temp_file(self.driver.session(), f"misconfig-session-temp={itr}")
             # tabulate_experiment_results(self.driver.session(),misconfig_growth_metrics)
@@ -1156,6 +1299,26 @@ class MainMenu(cmd.Cmd):
             # if itr == self.R-1 :
             #     plot_metrics(num_users, num_computers, num_misconfig, base_filename, misconfig_growth_metrics)
 
+        all_rows = []
+        for itr in sorted(misconfig_metrics_per_itr.keys()):
+            all_rows.extend(
+                rows_from_run_metrics(
+                    misconfig_metrics_per_itr[itr],
+                    itr=itr,
+                    base_filename=base_filename,
+                    seed_number=self.seed_number,
+                    injection_type="session",
+                    mode="isolated",
+                )
+            )
+
+        master_df, master_csv_path = save_master_csv(
+            all_rows,
+            out_dir="analysis/csv",
+            base_filename=base_filename,
+        )
+
+        logging.info("Saved master CSV: %s", master_csv_path)
         mu = compute_mu(misconfig_metrics_per_itr, "X")
         logging.info("Mu :%s", mu)
 
@@ -1212,7 +1375,10 @@ class MainMenu(cmd.Cmd):
 
         xl_filename = f"analysis/misconfig_metrics_{base_filename}_{initial_misconfig}_{self.seed_number}.xlsx"
 
-        export_metrics_to_excel(misconfig_metrics_per_itr[0], xl_filename, x_axis="step", metadata=chart_metadata)
+        # Commenting for roc check
+        # export_metrics_to_excel(misconfig_metrics_per_itr[0], xl_filename, x_axis="step", metadata=chart_metadata)
+        export_single_run_analysis_sheet(misconfig_metrics_per_itr[0],xl_filename)
+
         with open(
                 f"/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/generated_datasets/mgm_session_{base_filename}.json",
                 "w") as f:
