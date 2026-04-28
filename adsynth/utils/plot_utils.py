@@ -1379,9 +1379,14 @@ def export_experiment_to_duckdb_and_csv(
 
     master_df = pd.concat(all_dfs, ignore_index=True)
 
+    file_exists = os.path.exists(main_csv_path)
 
-    master_df.to_csv(main_csv_path, index=False)
-
+    master_df.to_csv(
+        main_csv_path,
+        mode="a" if file_exists else "w",
+        header=not file_exists,
+        index=False
+    )
 
     summary_rows = []
 
