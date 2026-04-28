@@ -1201,11 +1201,21 @@ def save_iteration_csv(rows, out_dir, base_filename, itr):
     df.to_csv(out_path, index=False)
     return df, out_path
 
-def save_master_csv(all_rows, out_dir, base_filename):
+def save_master_csv(all_rows, out_dir, experiment_name):
     os.makedirs(out_dir, exist_ok=True)
+
     df = pd.DataFrame(all_rows)
-    out_path = os.path.join(out_dir, f"session_{base_filename}_all_runs.csv")
-    df.to_csv(out_path, index=False)
+    out_path = os.path.join(out_dir, f"{experiment_name}_all_runs.csv")
+
+    file_exists = os.path.exists(out_path)
+
+    df.to_csv(
+        out_path,
+        mode="a" if file_exists else "w",
+        header=not file_exists,
+        index=False
+    )
+
     return df, out_path
 
 def compute_rise_metrics(metrics_dict, metric_keys=("HCI", "CSM", "TBS")):
