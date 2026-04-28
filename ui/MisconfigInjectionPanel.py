@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import ttk, messagebox, filedialog
+from tkinter import ttk, messagebox
 import threading
 
 
@@ -9,61 +9,18 @@ class MisconfigInjectionPanel:
         self.menu = menu
         self.frame = ttk.LabelFrame(parent, text="Misconfiguration Injection", padding=12)
         self.frame.pack(fill="both", expand=True)
+
         self.schedule_type = tk.StringVar(value="isolated")
-        self.injection_schedules = []
 
         self.session_var = tk.BooleanVar(value=True)
         self.i_perm_var = tk.BooleanVar(value=False)
         self.g_perm_var = tk.BooleanVar(value=False)
         self.nesting_var = tk.BooleanVar(value=False)
 
-        self.csv_path_var = tk.StringVar()
-        self.logreg_label_var = tk.StringVar(value="J_k5_z2p0")
-        self.run_logreg_after_injection_var = tk.BooleanVar(value=False)
         self._build_ui()
-
-    def _browse_csv_file(self):
-        path = filedialog.askopenfilename(
-            title="Select CSV File",
-            filetypes=[("CSV files", "*.csv")]
-        )
-        if path:
-            self.csv_path_var.set(path)
-
-    def run_model_suite_from_csv_ui(self):
-        csv_path = self.csv_path_var.get().strip()
-        label_col = self.logreg_label_var.get().strip()
-
-        if not csv_path:
-            messagebox.showerror("Missing CSV File", "Please choose a CSV file.")
-            return
-
-        def worker():
-            try:
-                self.menu.run_model_suite_from_csv(
-                    csv_path=csv_path,
-                    label_col=label_col,
-                )
-
-                self.parent.after(
-                    0,
-                    lambda: messagebox.showinfo(
-                        "Success",
-                        f"Model suite completed.\nLabel: {label_col}"
-                    )
-                )
-            except Exception as e:
-                err_msg = str(e)
-                self.parent.after(
-                    0,
-                    lambda: messagebox.showerror("Error", err_msg)
-                )
-
-        threading.Thread(target=worker, daemon=True).start()
 
     def _build_ui(self):
         frame = ttk.Frame(self.frame, padding=16)
-
         frame.pack(fill="both", expand=True)
 
         ttk.Label(
@@ -95,6 +52,7 @@ class MisconfigInjectionPanel:
             value="sequence",
             command=self._update_description
         ).pack(anchor="w", pady=4)
+
         ttk.Label(
             frame,
             text="Select Injection Types",
@@ -122,39 +80,6 @@ class MisconfigInjectionPanel:
         ttk.Button(button_row, text="Close", command=self.frame.destroy).pack(side="left", padx=8)
 
         self._update_description()
-        logreg_frame = ttk.LabelFrame(frame, text="Run Model Suite from CSV", padding=10)
-        logreg_frame.pack(fill="x", pady=(8, 12))
-
-        ttk.Checkbutton(
-            logreg_frame,
-            text="Run model suite after injection",
-            variable=self.run_logreg_after_injection_var
-        ).grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 8))
-
-        ttk.Label(logreg_frame, text="CSV File").grid(row=1, column=0, sticky="w")
-        ttk.Entry(logreg_frame, textvariable=self.csv_path_var, width=50).grid(row=1, column=1, sticky="ew", padx=6)
-        ttk.Button(logreg_frame, text="Browse", command=self._browse_csv_file).grid(row=1, column=2, sticky="w")
-
-        ttk.Label(logreg_frame, text="Label Column").grid(row=2, column=0, sticky="w", pady=(8, 0))
-        ttk.Combobox(
-            logreg_frame,
-            textvariable=self.logreg_label_var,
-            state="readonly",
-            values=[
-                "J_k5_z2p0",
-                "J_k10_z2p0",
-                "J_k5_d0p1",
-                "J_k10_d0p1",
-            ],
-        ).grid(row=2, column=1, sticky="ew", padx=6, pady=(8, 0))
-        # combo.set("J_k5_z2p0")
-        ttk.Button(
-            logreg_frame,
-            text="Run M1–M5 from CSV",
-            command=self.run_model_suite_from_csv_ui
-        ).grid(row=3, column=0, columnspan=2, sticky="w", pady=(10, 0))
-
-        logreg_frame.columnconfigure(1, weight=1)
 
     def get_selected_injections(self):
         injections = []
@@ -182,15 +107,15 @@ class MisconfigInjectionPanel:
                 "2. Individual permission only\n"
                 "3. Group permission only\n"
                 "4. Group nesting only\n\n"
-
             )
+
         elif mode == "mixed":
             self.description.insert(
                 "end",
                 "Run a single experiment where multiple misconfiguration types are injected together "
                 "into the same graph.\n\n"
-
             )
+
         elif mode == "sequence":
             self.description.insert(
                 "end",
@@ -200,12 +125,10 @@ class MisconfigInjectionPanel:
                 "Stage 2 -> Individual permissions\n"
                 "Stage 3 -> Group permissions\n"
                 "Stage 4 -> Group nesting\n\n"
-
             )
 
     def run_selected_schedule(self):
         mode = self.schedule_type.get()
-        output_name = self.output_name_var.get().strip()
         selected_injections = self.get_selected_injections()
 
         if not selected_injections:
@@ -220,43 +143,39 @@ class MisconfigInjectionPanel:
                     else:
                         self.parent.after(
                             0,
-                            lambda: messagebox.showerror("Error",
-                                                         "Isolated mode can run only injection schedules\n Please select only one schedule.")
+                            lambda: messagebox.showerror(
+                                "Error",
+                                "Isolated mode can run only one injection type."
+                            )
                         )
+
                 elif mode == "mixed":
                     if len(selected_injections) > 1:
                         self.menu.run_injection_schedule(mode, selected_injections)
                     else:
                         self.parent.after(
                             0,
-                            lambda: messagebox.showerror("Error",
-                                                         "Mixed mode can run multiple injection schedules\n Please select more than one schedule.")
+                            lambda: messagebox.showerror(
+                                "Error",
+                                "Mixed mode requires multiple injection types."
+                            )
                         )
+
                 elif mode == "sequence":
                     self.menu.run_injection_schedule(mode, selected_injections)
 
                 self.parent.after(
                     0,
-                    lambda: messagebox.showinfo("Success", f"{mode.title()} injection schedule completed.")
+                    lambda: messagebox.showinfo(
+                        "Success",
+                        f"{mode.title()} injection schedule completed."
+                    )
                 )
 
-                if self.run_logreg_after_injection_var.get():
-                    csv_path = self.csv_path_var.get().strip()
-                    label_col = self.logreg_label_var.get().strip()
-
-                    if csv_path:
-                        self.menu.run_model_suite_from_csv(
-                            csv_path=csv_path,
-                            label_col=label_col,
-                        )
-
             except Exception as e:
-
-                err_msg = str(e)
-
                 self.parent.after(
                     0,
-                    lambda: messagebox.showerror("Error", err_msg)
+                    lambda: messagebox.showerror("Error", str(e))
                 )
 
         threading.Thread(target=worker, daemon=True).start()
