@@ -423,8 +423,8 @@ def create_misconfig_sessions_from_entrypoints_multi_tiers_(nTiers, nx_attack_gr
     return nx_attack_graph
 
 
-def create_misconfig_sessions_from_entrypoints_multi_tiers(nTiers, networkx_graph , session, misconfig_count,
-                                                           security_level, parameters):
+def create_misconfig_sessions_from_entrypoints_multi_tiers(nTiers, networkx_graph, session, misconfig_count,
+                                                           security_level, parameters, misconfig_growth_metrics):
     if nTiers < 2:
         pass
 
@@ -493,7 +493,10 @@ def create_misconfig_sessions_from_entrypoints_multi_tiers(nTiers, networkx_grap
 
         EXP_MISCONFIGURED_SESSION_COMPUTERS.append(comp)
         EXP_MISCONFIGURED_SESSION_USERS.append(user)
+        if misconfig_count not in misconfig_growth_metrics:
+            misconfig_growth_metrics[misconfig_count] = {}
         EXP_MISCONFIGURED_SESSION[misconfig_count] = f"{comp}->{user}"
+        misconfig_growth_metrics[misconfig_count]["injection"] = f"{comp}->{user}"
         break
 
     # Graph analysis
@@ -570,7 +573,7 @@ def create_misconfig_permissions_on_groups_from_entrypoints(domain, nTiers, secu
                                                             locations,
                                                             ACL_PERMISSIONS,
                                                             NON_ACL_PERMISSIONS, misconfig_to_tier_0_allow,
-                                                            misconfig_to_tier_0_limit,misconfig_count,
+                                                            misconfig_to_tier_0_limit, misconfig_count,
                                                             nx_attack_graph):
     # Determine a group (LOCAL ADMINS)
     lowest_tier_no_admin = min(2, nTiers - 1)
@@ -653,7 +656,8 @@ def create_misconfig_permissions_on_groups_from_entrypoints(domain, nTiers, secu
     return nx_attack_graph
 
 
-def create_misconfig_group_nesting_from_entrypoints(domain, nTiers, departments_list, locations,misconfig_count,nx_attack_graph):
+def create_misconfig_group_nesting_from_entrypoints(domain, nTiers, departments_list, locations, misconfig_count,
+                                                    nx_attack_graph):
     # Determine a non-admin/regular group
     # Choose a tier and group type
     lowest_tier_no_admin = min(2, nTiers - 1)

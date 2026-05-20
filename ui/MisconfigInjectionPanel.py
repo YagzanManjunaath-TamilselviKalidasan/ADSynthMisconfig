@@ -1,10 +1,11 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
 import threading
-
+from tkinter import ttk, messagebox, filedialog
 
 class MisconfigInjectionPanel:
     def __init__(self, parent, menu):
+        self.mitigation_enabled = tk.BooleanVar(value=False)
         self.parent = parent
         self.menu = menu
         self.frame = ttk.LabelFrame(parent, text="Misconfiguration Injection", padding=12)
@@ -16,7 +17,7 @@ class MisconfigInjectionPanel:
         self.i_perm_var = tk.BooleanVar(value=False)
         self.g_perm_var = tk.BooleanVar(value=False)
         self.nesting_var = tk.BooleanVar(value=False)
-
+        self.neo4j_json_path_var = tk.StringVar()
         self._build_ui()
 
     def _build_ui(self):
@@ -73,6 +74,42 @@ class MisconfigInjectionPanel:
         self.output_name_var = tk.StringVar()
         ttk.Entry(frame, textvariable=self.output_name_var).pack(fill="x", pady=(4, 12))
 
+        ttk.Checkbutton(
+            frame,
+            text="Enable Mitigation",
+            variable=self.mitigation_enabled
+        ).pack(anchor="w", pady=(8, 12))
+
+        ttk.Separator(frame, orient="horizontal").pack(fill="x", pady=(16, 12))
+
+        ttk.Label(
+            frame,
+            text="Load Neo4j Graph from JSON",
+            font=("Arial", 11, "bold")
+        ).pack(anchor="w", pady=(0, 6))
+
+        ttk.Label(frame, text="JSON File").pack(anchor="w")
+
+        neo4j_file_row = ttk.Frame(frame)
+        neo4j_file_row.pack(fill="x", pady=(4, 8))
+
+        ttk.Entry(
+            neo4j_file_row,
+            textvariable=self.neo4j_json_path_var
+        ).pack(side="left", fill="x", expand=True)
+
+        ttk.Button(
+            neo4j_file_row,
+            text="Browse",
+            command=self.select_neo4j_json_file
+        ).pack(side="left", padx=(8, 0))
+
+        ttk.Button(
+            frame,
+            text="Load JSON into Neo4j",
+            command=self.load_neo4j_json
+        ).pack(anchor="w", pady=(4, 12))
+
         button_row = ttk.Frame(frame)
         button_row.pack(fill="x", pady=(10, 0))
 
@@ -95,6 +132,44 @@ class MisconfigInjectionPanel:
 
         return injections
 
+    def select_neo4j_json_file(self):
+        filename = filedialog.askopenfilename(
+            title="Select Graph JSON File",
+            filetypes=[
+                ("JSON files", "*.json"),
+                ("All files", "*.*")
+            ]
+        )
+
+        if filename:
+            self.neo4j_json_path_var.set(filename)
+
+    def load_neo4j_json(self):
+        filename = self.neo4j_json_path_var.get().strip()
+
+        if not filename:
+            messagebox.showerror("No File Selected", "Please select a JSON file.")
+            return
+
+        def worker():
+            try:
+                self.menu.do_load_neo4jFromJson(filename)
+
+                self.parent.after(
+                    0,
+                    lambda: messagebox.showinfo(
+                        "Success",
+                        "Graph loaded into Neo4j successfully."
+                    )
+                )
+
+            except Exception as e:
+                self.parent.after(
+                    0,
+                    lambda: messagebox.showerror("Error", str(e))
+                )
+
+        threading.Thread(target=worker, daemon=True).start()
     def _update_description(self):
         mode = self.schedule_type.get()
         self.description.delete("1.0", "end")
@@ -139,7 +214,7 @@ class MisconfigInjectionPanel:
             try:
                 if mode == "isolated":
                     if len(selected_injections) == 1:
-                        self.menu.run_injection_schedule(mode, selected_injections)
+                        self.menu.run_injection_schedule(mode,self.mitigation_enabled.get(),selected_injections)
                     else:
                         self.parent.after(
                             0,
@@ -151,7 +226,7 @@ class MisconfigInjectionPanel:
 
                 elif mode == "mixed":
                     if len(selected_injections) > 1:
-                        self.menu.run_injection_schedule(mode, selected_injections)
+                        self.menu.run_injection_schedule(mode,self.mitigation_enabled, selected_injections)
                     else:
                         self.parent.after(
                             0,
@@ -162,7 +237,7 @@ class MisconfigInjectionPanel:
                         )
 
                 elif mode == "sequence":
-                    self.menu.run_injection_schedule(mode, selected_injections)
+                    self.menu.run_injection_schedule(mode, self.mitigation_enabled,selected_injections)
 
                 self.parent.after(
                     0,

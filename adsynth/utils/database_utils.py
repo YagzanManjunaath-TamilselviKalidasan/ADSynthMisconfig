@@ -216,8 +216,6 @@ def restore_experiment_state(iteration_index: int = 0, verbose: bool = False):
     }
 
 
-
-
 def _json_safe(obj: Any) -> Any:
     """Recursively convert non-JSON-native types to JSON-safe forms."""
     if isinstance(obj, dict):
@@ -439,14 +437,14 @@ import os
 def load_graph_from_file(session,filename: str):
 
 
-    file_path = f"/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/generated_datasets/{filename}"
+    # file_path = f"/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/generated_datasets/{filename}"
 
-    if not os.path.exists(file_path):
-        raise FileNotFoundError(f"File not found: {file_path}")
+    if not os.path.exists(filename):
+        raise FileNotFoundError(f"File not found: {filename}")
 
     nodes, edges = [], []
 
-    with open(file_path, "r", encoding="utf-8") as f:
+    with open(filename, "r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line:
@@ -494,5 +492,5 @@ def load_graph_from_file(session,filename: str):
     os.remove(abs_path)
 
 
-    print(f"Loaded {len(nodes)} nodes and {len(edges)} edges from {file_path}")
-    return {"nodes": len(nodes), "edges": len(edges), "path": file_path}
+    print(f"Loaded {len(nodes)} nodes and {len(edges)} edges from {filename}")
+    return {"nodes": len(nodes), "edges": len(edges), "path": filename}

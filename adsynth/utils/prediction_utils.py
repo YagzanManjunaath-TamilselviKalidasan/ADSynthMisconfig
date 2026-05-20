@@ -278,7 +278,7 @@ def calc_thresholds_and_jump_labels_for_iteration(
         itr=itr,
         baseline_fraction=baseline_fraction,
         min_points=min_points,
-        export_csv=True,
+        export_csv=False,
     )
 
     print(f"\nIteration {itr} thresholds:")
@@ -702,7 +702,7 @@ def prepare_prediction_pipeline(
         misconfig_metrics_per_itr,
         thresholds
     )
-    export_metrics_to_csv(metrics_with_alarms, "misconfig_metrics_with_alarms.csv")
+    # export_metrics_to_csv(metrics_with_alarms, "misconfig_metrics_with_alarms.csv")
     # a 10–20% absolute increase in exposed nodes within the next 5 or 10 misconfiguration events.
     metrics_with_labels = compute_jump_labels(metrics_with_alarms)
 

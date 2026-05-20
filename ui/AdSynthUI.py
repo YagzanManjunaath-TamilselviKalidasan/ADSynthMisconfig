@@ -16,6 +16,7 @@ from ui.MisconfigInjectionPanel import MisconfigInjectionPanel
 
 class ADSynthUI:
     def __init__(self, root):
+
         self.root = root
         self.root.title("ADSynth UI")
         self.root.geometry("1100x900")
@@ -29,6 +30,7 @@ class ADSynthUI:
         self.db_pass_var = tk.StringVar(value="admin1234")
         self.domain_var = tk.StringVar(value=self.menu.domain)
         self.misconfig_var = tk.BooleanVar(value=False)
+
         self.random_seed = tk.IntVar(value=1)
 
         self._build_ui()
@@ -70,6 +72,8 @@ class ADSynthUI:
             variable=self.misconfig_var
         ).pack(anchor="w", pady=(8, 12))
 
+
+
         button_frame = ttk.Frame(left_panel)
         button_frame.pack(fill="x", pady=6)
 
@@ -101,6 +105,7 @@ class ADSynthUI:
     def browse_json(self):
         file_path = filedialog.askopenfilename(
             title="Select JSON Config",
+            initialdir='/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/adsynth/experiment_params',
             filetypes=[("JSON files", "*.json"), ("All files", "*.*")]
         )
         if file_path:

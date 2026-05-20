@@ -77,6 +77,7 @@ class PredictionRunner:
     def _browse_csv_file(self):
         path = filedialog.askopenfilename(
             title="Select CSV File",
+            initialdir='/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/analysis/csv',
             filetypes=[("CSV files", "*.csv")]
         )
 
@@ -120,6 +121,6 @@ if __name__ == "__main__":
     root.title("Prediction Runner")
     root.geometry("750x350")
 
-    app = PredictionRunner(root, menu=None)
+    app = PredictionRunner(root)
 
     root.mainloop()
