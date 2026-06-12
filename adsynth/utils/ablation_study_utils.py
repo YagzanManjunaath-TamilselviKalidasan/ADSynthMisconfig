@@ -40,6 +40,8 @@ def build_tier_caches(low_tiers=None, tier0_value=0):
         low_tiers = {2}
 
     DB.ID_TO_NAME.clear()
+    DB.NAME_TO_ID.clear()
+
     DB.ALL_LOW_TIER_COMPUTERS.clear()
 
     seen_t0_users = set()
@@ -53,6 +55,7 @@ def build_tier_caches(low_tiers=None, tier0_value=0):
             continue
 
         DB.ID_TO_NAME[node_id] = name
+        DB.NAME_TO_ID[name] = node_id
 
         if name in DB.USER_TIER and DB.USER_TIER[name] == tier0_value:
             seen_t0_users.add(name)
@@ -130,7 +133,6 @@ def user_tier_fn(dn: str):
     # m = re.search(r"OU=T(\d+)\b", dn, flags=re.IGNORECASE)
     # return int(m.group(1)) if m else 2
 
-
 def indicators_hci_csm_tbs(
     EXP_EDGE,
     misconfig_growth_metrics,
@@ -147,20 +149,38 @@ def indicators_hci_csm_tbs(
 
     d_sess = Counter(str(e["start"]["id"]) for e in has_session_edges)
 
-    # Prefer all cached low-tier computers; fall back to active low-tier computers only
-    if ALL_LOW_TIER_COMPUTERS:
-        C_low = {str(c) for c in ALL_LOW_TIER_COMPUTERS if comp_tier_fn(str(c)) in low_tiers}
+    # Low-tier computers
+    if DB.ALL_LOW_TIER_COMPUTERS:
+        C_low = {str(c) for c in DB.ALL_LOW_TIER_COMPUTERS}
     else:
-        C_low = {c for c in d_sess.keys() if comp_tier_fn(c) in low_tiers}
+        C_low = {
+            str(c)
+            for c in d_sess.keys()
+            if DB.COMPUTER_TIER.get(DB.ID_TO_NAME.get(str(c))) in low_tiers
+        }
 
+    # -------------------------
     # HCI
+    # -------------------------
     if not C_low:
         HCI = 0.0
+        HCI_num = 0.0
+        HCI_denom = 0.0
+        HCI_dbar = 0.0
     else:
-        dbar = sum(d_sess.get(c, 0) for c in C_low) / len(C_low)
-        denom = (dbar + eps) ** 2
-        HCI = (1 / len(C_low)) * sum((d_sess.get(c, 0) ** 2) / denom for c in C_low)
+        HCI_dbar = sum(d_sess.get(c, 0) for c in C_low) / len(C_low)
+        HCI_denom = (HCI_dbar + eps) ** 2
 
+        HCI_num = sum(
+            (d_sess.get(c, 0) ** 2) / HCI_denom
+            for c in C_low
+        )
+
+        HCI = HCI_num / len(C_low)
+
+    # -------------------------
+    # CSM and TBS
+    # -------------------------
     cross = 0
     t0_cross = 0
 
@@ -168,28 +188,71 @@ def indicators_hci_csm_tbs(
         c = str(e["start"]["id"])
         u = str(e["end"]["id"])
 
-        t_c = comp_tier_fn(c)
-        t_u = user_tier_fn(u)
+        c_name = DB.ID_TO_NAME.get(c)
+        u_name = DB.ID_TO_NAME.get(u)
+
+        t_c = DB.COMPUTER_TIER.get(c_name, -1)
+        t_u = DB.USER_TIER.get(u_name, -1)
 
         if t_c == -1 or t_u == -1:
             continue
 
-
         if t_u < t_c:
             cross += 1
+
             if t_u == 0 and t_c > 0:
                 t0_cross += 1
 
-    # CSM = cross-tier session mass / total users
-    CSM = cross / num_users if num_users else 0.0
+    CSM_num = cross
+    CSM_denom = num_users
+    CSM = CSM_num / CSM_denom if CSM_denom else 0.0
 
-    # TBS = Tier 0 boundary-violating sessions / total Tier 0 users
-    TBS = t0_cross / TOTAL_T0_USERS if TOTAL_T0_USERS else 0.0
+    TBS_num = t0_cross
+    TBS_denom = TOTAL_T0_USERS
+    TBS = TBS_num / TBS_denom if TBS_denom else 0.0
 
-    misconfig_growth_metrics[misconfig_session_count]["HCI"] = HCI
-    misconfig_growth_metrics[misconfig_session_count]["CSM"] = CSM
-    misconfig_growth_metrics[misconfig_session_count]["TBS"] = TBS
+    # -------------------------
+    # Store indicators
+    # -------------------------
+    row = misconfig_growth_metrics[misconfig_session_count]
 
+    row["HCI"] = HCI
+    row["CSM"] = CSM
+    row["TBS"] = TBS
+
+    # HCI decomposition
+    # row["HCI_num"] = HCI_num
+    # row["HCI_denom"] = HCI_denom
+    # row["HCI_dbar"] = HCI_dbar
+    # row["HCI_low_tier_computer_count"] = len(C_low)
+
+    # CSM decomposition
+    # row["CSM_num_cross_tier_sessions"] = CSM_num
+    # row["CSM_denom_num_users"] = CSM_denom
+
+    # TBS decomposition
+    # row["TBS_num_t0_cross_sessions"] = TBS_num
+    # row["TBS_denom_total_t0_users"] = TBS_denom
+
+    print(
+        f"[HCI] value={HCI:.4f} | "
+        f"num={HCI_num:.4f} | "
+        f"denom={HCI_denom:.4f} | "
+        f"dbar={HCI_dbar:.4f} | "
+        f"low_tier_computers={len(C_low)}"
+    )
+
+    print(
+        f"[CSM] value={CSM:.4f} | "
+        f"num_cross_tier_sessions={CSM_num} | "
+        f"denom_num_users={CSM_denom}"
+    )
+
+    print(
+        f"[TBS] value={TBS:.4f} | "
+        f"num_t0_cross_sessions={TBS_num} | "
+        f"denom_total_t0_users={TBS_denom}"
+    )
 def exposure_X(reachable_users_count, reachable_comps_count, num_users, num_computers):
     denom = num_users + num_computers
     return (reachable_users_count + reachable_comps_count) / denom if denom else 0.0
@@ -395,7 +458,6 @@ def pbcc_bounded_bfs_tier2_computers_debug(
     session_edge_labels=None,
     max_example_paths_per_type=5,
 ):
-
     if allowed_edge_labels is None:
         allowed_edge_labels = {
             "HasSession",
@@ -413,24 +475,22 @@ def pbcc_bounded_bfs_tier2_computers_debug(
     if session_edge_labels is None:
         session_edge_labels = {"HasSession"}
 
+    nodes = networkx_graph.nodes
+
     def node_name(n):
-        return networkx_graph.nodes[n].get("name", n)
+        return DB.ID_TO_NAME.get(n, nodes[n].get("name", n))
 
     def classify_path(seen_sess, seen_non_sess):
         if seen_sess and seen_non_sess:
             return "mixed"
-        elif seen_sess:
+        if seen_sess:
             return "session_only"
-        elif seen_non_sess:
+        if seen_non_sess:
             return "non_session_only"
         return "unknown"
 
-    def edge_labels_between(u, v):
-        labs = get_edge_labels(networkx_graph, u, v)
-        return labs if labs else []
+    target_id = DB.NAME_TO_ID.get(high_value_target_name)
 
-    # Target
-    target_id = get_id_from_name(networkx_graph, high_value_target_name)
     if target_id is None or target_id not in networkx_graph:
         return {
             "pbcc": 0.0,
@@ -442,15 +502,19 @@ def pbcc_bounded_bfs_tier2_computers_debug(
             "error": f"Target not found: {high_value_target_name}",
         }
 
-    # Tier-2 computer footholds
-    foothold_ids = []
-    foothold_names_valid = []
+    # Use cached low-tier computers instead of scanning all graph nodes
+    if foothold_tier == 2 and DB.ALL_LOW_TIER_COMPUTERS:
+        foothold_ids = [
+            nid for nid in DB.ALL_LOW_TIER_COMPUTERS
+            if nid in networkx_graph
+        ]
+    else:
+        foothold_ids = [
+            nid for nid in networkx_graph.nodes
+            if DB.COMPUTER_TIER.get(node_name(nid), -1) == foothold_tier
+        ]
 
-    for nid in networkx_graph.nodes:
-        name = node_name(nid)
-        if COMPUTER_TIER.get(name, -1) == foothold_tier:
-            foothold_ids.append(nid)
-            foothold_names_valid.append(name)
+    foothold_names_valid = [node_name(nid) for nid in foothold_ids]
 
     if not foothold_ids:
         return {
@@ -465,10 +529,24 @@ def pbcc_bounded_bfs_tier2_computers_debug(
             "error": f"No Tier-{foothold_tier} computer footholds found",
         }
 
+    # Cache allowed edge labels once
+    edge_label_cache = {}
+    graph_label_counter = Counter()
+
+    for u, v, data in networkx_graph.edges(data=True):
+        lab = data.get("label")
+        if lab is None:
+            continue
+
+        graph_label_counter[lab] += 1
+
+        if lab in allowed_edge_labels:
+            edge_label_cache.setdefault((u, v), []).append(lab)
+
     bridge_counter = Counter()
     successful_paths = 0
-
     path_type_counts = Counter()
+
     path_type_examples = {
         "mixed": [],
         "session_only": [],
@@ -478,18 +556,14 @@ def pbcc_bounded_bfs_tier2_computers_debug(
 
     foothold_debug = {}
 
-    # Global graph label stats
-    graph_label_counter = Counter()
-    for u, v in networkx_graph.edges():
-        for lab in edge_labels_between(u, v):
-            graph_label_counter[lab] += 1
-
     for src in foothold_ids:
         src_name = node_name(src)
 
-        q = deque([(src, 0, False, False, [src], [])])
-        # state = (node, depth, seen_sess, seen_non_sess)
+        q = deque([(src, 0, False, False)])
         visited = {(src, 0, False, False)}
+
+        # parent map only for reconstructing example/bridge paths
+        parent = {}
 
         reached_target_any = 0
         reached_target_by_type = Counter()
@@ -501,11 +575,10 @@ def pbcc_bounded_bfs_tier2_computers_debug(
 
         seen_any_session_edge = False
         seen_any_non_session_edge = False
-
         max_depth_reached = 0
 
         while q:
-            node, depth, seen_sess, seen_non_sess, path_nodes, path_edge_labels = q.popleft()
+            node, depth, seen_sess, seen_non_sess = q.popleft()
             expanded_states += 1
             max_depth_reached = max(max_depth_reached, depth)
 
@@ -515,15 +588,36 @@ def pbcc_bounded_bfs_tier2_computers_debug(
                 reached_target_by_type[ptype] += 1
                 path_type_counts[ptype] += 1
 
+                state = (node, depth, seen_sess, seen_non_sess)
+
+                # reconstruct path only when needed
+                path_nodes = None
+                path_edge_labels = None
+
+                if ptype == "mixed" or len(path_type_examples[ptype]) < max_example_paths_per_type:
+                    rev_nodes = []
+                    rev_labels = []
+                    cur = state
+
+                    while cur in parent:
+                        cur_node, _, _, _ = cur
+                        prev_state, edge_label = parent[cur]
+                        rev_nodes.append(cur_node)
+                        rev_labels.append(edge_label)
+                        cur = prev_state
+
+                    rev_nodes.append(src)
+                    path_nodes = list(reversed(rev_nodes))
+                    path_edge_labels = list(reversed(rev_labels))
+
                 if len(path_type_examples[ptype]) < max_example_paths_per_type:
                     path_type_examples[ptype].append({
                         "source": src_name,
                         "depth": depth,
                         "nodes": [node_name(n) for n in path_nodes],
-                        "edge_labels": list(path_edge_labels),
+                        "edge_labels": path_edge_labels,
                     })
 
-                # PBCC counts only mixed paths as bridge-forming paths
                 if ptype == "mixed":
                     successful_paths += 1
                     interior_nodes = path_nodes[1:-1]
@@ -537,40 +631,32 @@ def pbcc_bounded_bfs_tier2_computers_debug(
                 continue
 
             for nbr in networkx_graph.successors(node):
-                edge_labels = edge_labels_between(node, nbr)
-                if not edge_labels:
-                    pruned_no_labels += 1
-                    continue
+                valid_labels = edge_label_cache.get((node, nbr), [])
 
-                valid_labels = [lab for lab in edge_labels if lab in allowed_edge_labels]
                 if not valid_labels:
                     pruned_no_allowed_labels += 1
                     continue
 
                 for lab in valid_labels:
-                    if lab in session_edge_labels:
+                    lab_is_session = lab in session_edge_labels
+
+                    if lab_is_session:
                         seen_any_session_edge = True
                     else:
                         seen_any_non_session_edge = True
 
-                    next_seen_sess = seen_sess or (lab in session_edge_labels)
-                    next_seen_non_sess = seen_non_sess or (lab not in session_edge_labels)
+                    next_seen_sess = seen_sess or lab_is_session
+                    next_seen_non_sess = seen_non_sess or not lab_is_session
 
-                    state = (nbr, depth + 1, next_seen_sess, next_seen_non_sess)
-                    if state in visited:
+                    next_state = (nbr, depth + 1, next_seen_sess, next_seen_non_sess)
+
+                    if next_state in visited:
                         continue
 
-                    visited.add(state)
-                    q.append((
-                        nbr,
-                        depth + 1,
-                        next_seen_sess,
-                        next_seen_non_sess,
-                        path_nodes + [nbr],
-                        path_edge_labels + [lab],
-                    ))
+                    visited.add(next_state)
+                    parent[next_state] = ((node, depth, seen_sess, seen_non_sess), lab)
+                    q.append(next_state)
 
-        # Explain foothold outcome
         if reached_target_any == 0:
             if max_depth_reached >= L:
                 reason = f"target_not_reached_within_bound_L={L}"
@@ -1252,3 +1338,15 @@ def compute_rise_metrics(metrics_dict, metric_keys=("HCI", "CSM", "TBS")):
             prev_vals[k] = curr
 
     return metrics_dict
+
+
+def classify_transition_from_delta(self, j_value):
+    if j_value < 0.02:
+        return "no_transition"
+    elif j_value < 0.05:
+        return "weak_transition"
+    elif j_value < 0.10:
+        return "moderate_transition"
+    else:
+        return "strong_transition"
+

@@ -226,7 +226,7 @@ class MisconfigInjectionPanel:
 
                 elif mode == "mixed":
                     if len(selected_injections) > 1:
-                        self.menu.run_injection_schedule(mode,self.mitigation_enabled, selected_injections)
+                        self.menu.run_injection_schedule(mode,self.mitigation_enabled.get(), selected_injections)
                     else:
                         self.parent.after(
                             0,
@@ -237,7 +237,7 @@ class MisconfigInjectionPanel:
                         )
 
                 elif mode == "sequence":
-                    self.menu.run_injection_schedule(mode, self.mitigation_enabled,selected_injections)
+                    self.menu.run_injection_schedule(mode, self.mitigation_enabled.get(),selected_injections)
 
                 self.parent.after(
                     0,

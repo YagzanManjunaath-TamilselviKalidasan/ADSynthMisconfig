@@ -7,6 +7,7 @@ import plotly.graph_objects as go
 import plotly.io as pio
 import numpy as np
 import os
+from filelock import FileLock
 import pandas as pd
 import duckdb
 
@@ -1324,445 +1325,636 @@ def export_experiment_to_duckdb_and_csv(
         os.makedirs(os.path.dirname(duckdb_path), exist_ok=True)
         os.makedirs(os.path.dirname(main_csv_path), exist_ok=True)
         print("Duck db path " + duckdb_path)
-        expected_cols = [
-            "experiment_id", "iteration_id", "step", "injection_type","injection",
-            "reachable_users", "new_reachable_users",
-            "reachable_comps", "new_reachable_comps_names", "reachable_comps_names",
-            "reachable_users_count", "reachable_comps_count",
-            "p", "X", "X_users", "X_comps",
-            "HCI", "CSM", "TBS", "PBCC", "delta_X",
-            "rise_flag_HCI", "rise_streak_HCI", "rise_total_HCI",
-            "rise_flag_CSM", "rise_streak_CSM", "rise_total_CSM",
-            "rise_flag_TBS", "rise_streak_TBS", "rise_total_TBS",
-            "A_HCI", "A_CSM", "A_TBS", "A_PBCC",
-            "future_delta_k5", "Z_k5", "J_k5_z2p0",
-            "future_delta_k10", "Z_k10", "J_k10_z2p0",
-        ]
+        lock = FileLock(f"{duckdb_path}.lock")
 
-        numeric_cols = [
-            "step", "reachable_users_count", "reachable_comps_count",
-            "p", "X", "X_users", "X_comps",
-            "HCI", "CSM", "TBS", "PBCC", "delta_X",
-            "rise_flag_HCI", "rise_streak_HCI", "rise_total_HCI",
-            "rise_flag_CSM", "rise_streak_CSM", "rise_total_CSM",
-            "rise_flag_TBS", "rise_streak_TBS", "rise_total_TBS",
-            "A_HCI", "A_CSM", "A_TBS", "A_PBCC",
-            "future_delta_k5", "Z_k5", "J_k5_z2p0",
-            "future_delta_k10", "Z_k10", "J_k10_z2p0",
-        ]
+        with lock:
+            con = duckdb.connect(duckdb_path)
+            try:
+                expected_cols = [
+                    "experiment_id", "iteration_id", "step", "injection_type", "injection",
+                    "reachable_users", "new_reachable_users",
+                    "reachable_comps", "new_reachable_comps_names", "reachable_comps_names",
+                    "reachable_users_count", "reachable_comps_count",
+                    "p", "X", "X_users", "X_comps",
+                    "HCI", "CSM", "TBS", "PBCC", "delta_X",
+                    "rise_flag_HCI", "rise_streak_HCI", "rise_total_HCI",
+                    "rise_flag_CSM", "rise_streak_CSM", "rise_total_CSM",
+                    "rise_flag_TBS", "rise_streak_TBS", "rise_total_TBS",
+                    "A_HCI", "A_CSM", "A_TBS", "A_PBCC",
+                    "future_delta_k5", "Z_k5", "J_k5_z2p0",
+                    "future_delta_k10", "Z_k10", "J_k10_z2p0",
+                ]
 
-        all_dfs = []
+                numeric_cols = [
+                    "step", "reachable_users_count", "reachable_comps_count",
+                    "p", "X", "X_users", "X_comps",
+                    "HCI", "CSM", "TBS", "PBCC", "delta_X",
+                    "rise_flag_HCI", "rise_streak_HCI", "rise_total_HCI",
+                    "rise_flag_CSM", "rise_streak_CSM", "rise_total_CSM",
+                    "rise_flag_TBS", "rise_streak_TBS", "rise_total_TBS",
+                    "A_HCI", "A_CSM", "A_TBS", "A_PBCC",
+                    "future_delta_k5", "Z_k5", "J_k5_z2p0",
+                    "future_delta_k10", "Z_k10", "J_k10_z2p0",
+                ]
 
-        for itr, metrics_dict in sorted(misconfig_metrics_per_itr.items()):
-            df = pd.DataFrame.from_dict(metrics_dict, orient="index")
+                all_dfs = []
 
-            if "step" in df.columns:
-                df = df.drop(columns=["step"])
+                for itr, metrics_dict in sorted(misconfig_metrics_per_itr.items()):
+                    df = pd.DataFrame.from_dict(metrics_dict, orient="index")
 
-            df = df.sort_index().reset_index().rename(columns={"index": "step"})
+                    if "step" in df.columns:
+                        df = df.drop(columns=["step"])
 
-            iteration_id = f"iter_{itr}"
+                    df = df.sort_index().reset_index().rename(columns={"index": "step"})
 
-            df.insert(0, "iteration_id", iteration_id)
-            df.insert(0, "experiment_id", experiment_id)
-            df.insert(0, "injection_type", injection_type)
+                    iteration_id = f"iter_{itr}"
 
-            for col in expected_cols:
-                if col not in df.columns:
-                    df[col] = None
+                    df.insert(0, "iteration_id", iteration_id)
+                    df.insert(0, "experiment_id", experiment_id)
+                    df.insert(0, "injection_type", injection_type)
 
-            df = df[expected_cols]
+                    df_full = df.copy()
 
-            for col in numeric_cols:
-                df[col] = pd.to_numeric(df[col], errors="coerce")
+                    for col in expected_cols:
+                        if col not in df_full.columns:
+                            df_full[col] = None
 
-            all_dfs.append(df)
+                    for col in numeric_cols:
+                        if col in df_full.columns:
+                            df_full[col] = pd.to_numeric(df_full[col], errors="coerce")
 
-        if not all_dfs:
-            raise ValueError("No iterations found in misconfig_metrics_per_itr")
+                    all_dfs.append(df_full)
 
-        master_df = pd.concat(all_dfs, ignore_index=True)
+                if not all_dfs:
+                    raise ValueError("No iterations found in misconfig_metrics_per_itr")
 
-        file_exists = os.path.exists(main_csv_path)
+                master_full_df = pd.concat(all_dfs, ignore_index=True)
 
-        master_df.to_csv(
-            main_csv_path,
-            mode="a" if file_exists else "w",
-            header=not file_exists,
-            index=False
-        )
+                master_df = master_full_df[expected_cols].copy()
+                mitigation_cols = [
+                    "experiment_id",
+                    "injection_type",
+                    "iteration_id",
+                    "step",
 
-        summary_rows = []
+                    "mitigation_enabled",
+                    "mitigation_condition",
+                    "mitigation_budget",
 
-        all_p_values = sorted(set(mu.keys()) | set(sigma2.keys()))
+                    "alarm_triggered",
+                    "mitigation_removed",
 
-        for p in all_p_values:
-            summary_rows.append({
-                "experiment_id": experiment_id,
-                "injection_type": injection_type,
-                "p": p,
-                "mu_X": mu.get(p),
-                "sigma2_X": sigma2.get(p),
-                "is_p_star": p == p_star,
-                "p_star": p_star,
-            })
+                    "used_mitigation_cost",
+                    "removed_mitigation_count",
 
-        summary_df = pd.DataFrame(summary_rows)
+                    "last_removed_edge_label",
+                    "last_removed_edge_cost",
+                    "last_removed_edge_advantage",
+                    "last_removed_edge_score",
+                ]
+                mitigation_numeric_cols = [
+                    "mitigation_enabled",
+                    "mitigation_budget",
+                    "alarm_triggered",
+                    "mitigation_removed",
+                    "used_mitigation_cost",
+                    "removed_mitigation_count",
+                    "last_removed_edge_cost",
+                    "last_removed_edge_advantage",
+                    "last_removed_edge_score",
+                ]
 
-        # -------------------------
-        # DuckDB export
-        # -------------------------
-        con = duckdb.connect(duckdb_path)
+                for col in mitigation_cols:
+                    if col not in master_full_df.columns:
+                        master_full_df[col] = None
 
-        con.execute("""
-                    CREATE TABLE IF NOT EXISTS experiments
-                    (
-                        experiment_id
-                        VARCHAR
-                        PRIMARY
-                        KEY,
-                        experiment_name
-                        VARCHAR,
-                        base_graph_id
-                        VARCHAR,
-                        base_graph_name
-                        VARCHAR,
-                        regime_id
-                        VARCHAR,
-                        injection_type
-                        VARCHAR,
-                        mode
-                        VARCHAR,
-                        seed_number
-                        INTEGER,
-                        initial_misconfig
-                        BOOLEAN,
-                        description
-                        VARCHAR,
-                        created_at
-                        TIMESTAMP
-                        DEFAULT
-                        CURRENT_TIMESTAMP
-                    );
+                mitigation_df = master_full_df[mitigation_cols].copy()
+
+                for col in mitigation_numeric_cols:
+                    if col in mitigation_df.columns:
+                        mitigation_df[col] = pd.to_numeric(
+                            mitigation_df[col],
+                            errors="coerce",
+                        )
+
+                mitigation_df = mitigation_df[
+                    mitigation_df["mitigation_enabled"].notna()
+                ]
+
+                file_exists = os.path.exists(main_csv_path)
+
+                master_df.to_csv(
+                    main_csv_path,
+                    mode="a" if file_exists else "w",
+                    header=not file_exists,
+                    index=False
+                )
+
+                summary_rows = []
+
+                all_p_values = sorted(set(mu.keys()) | set(sigma2.keys()))
+
+                for p in all_p_values:
+                    summary_rows.append({
+                        "experiment_id": experiment_id,
+                        "injection_type": injection_type,
+                        "p": p,
+                        "mu_X": mu.get(p),
+                        "sigma2_X": sigma2.get(p),
+                        "is_p_star": p == p_star,
+                        "p_star": p_star,
+                    })
+
+                summary_df = pd.DataFrame(summary_rows)
+
+                # -------------------------
+                # DuckDB export
+                # -------------------------
+
+                con.execute("""
+                            CREATE TABLE IF NOT EXISTS experiments
+                            (
+                                experiment_id
+                                VARCHAR
+                                PRIMARY
+                                KEY,
+                                experiment_name
+                                VARCHAR,
+                                base_graph_id
+                                VARCHAR,
+                                base_graph_name
+                                VARCHAR,
+                                regime_id
+                                VARCHAR,
+                                injection_type
+                                VARCHAR,
+                                mode
+                                VARCHAR,
+                                seed_number
+                                INTEGER,
+                                initial_misconfig
+                                BOOLEAN,
+                                description
+                                VARCHAR,
+                                created_at
+                                TIMESTAMP
+                                DEFAULT
+                                CURRENT_TIMESTAMP
+                            );
+                            """)
+
+                con.execute("""
+                            CREATE TABLE IF NOT EXISTS experiment_iterations
+                            (
+                                experiment_id
+                                VARCHAR
+                                NOT
+                                NULL,
+                                iteration_id
+                                VARCHAR
+                                NOT
+                                NULL,
+                                seed
+                                INTEGER,
+                                injection_schedule_name
+                                VARCHAR,
+                                initial_misconfig
+                                BOOLEAN,
+                                notes
+                                VARCHAR,
+                                created_at
+                                TIMESTAMP
+                                DEFAULT
+                                CURRENT_TIMESTAMP,
+                                PRIMARY
+                                KEY
+                            (
+                                experiment_id,
+                                iteration_id
+                            )
+                                );
+                            """)
+
+                con.execute("""
+                            CREATE TABLE IF NOT EXISTS metric_steps
+                            (
+                                experiment_id
+                                VARCHAR
+                                NOT
+                                NULL,
+                                iteration_id
+                                VARCHAR
+                                NOT
+                                NULL,
+                                step
+                                INTEGER
+                                NOT
+                                NULL,
+                                injection_type
+                                VARCHAR
+                                NOT
+                                NULL,
+                                reachable_users
+                                VARCHAR,
+                                new_reachable_users
+                                VARCHAR,
+                                reachable_comps
+                                VARCHAR,
+                                new_reachable_comps_names
+                                VARCHAR,
+                                reachable_comps_names
+                                VARCHAR,
+
+                                reachable_users_count
+                                INTEGER,
+                                reachable_comps_count
+                                INTEGER,
+
+                                p
+                                DOUBLE,
+                                X
+                                DOUBLE,
+                                X_users
+                                DOUBLE,
+                                X_comps
+                                DOUBLE,
+
+                                HCI
+                                DOUBLE,
+                                CSM
+                                DOUBLE,
+                                TBS
+                                DOUBLE,
+                                PBCC
+                                DOUBLE,
+                                delta_X
+                                DOUBLE,
+
+                                rise_flag_HCI
+                                INTEGER,
+                                rise_streak_HCI
+                                INTEGER,
+                                rise_total_HCI
+                                INTEGER,
+
+                                rise_flag_CSM
+                                INTEGER,
+                                rise_streak_CSM
+                                INTEGER,
+                                rise_total_CSM
+                                INTEGER,
+
+                                rise_flag_TBS
+                                INTEGER,
+                                rise_streak_TBS
+                                INTEGER,
+                                rise_total_TBS
+                                INTEGER,
+
+                                A_HCI
+                                DOUBLE,
+                                A_CSM
+                                DOUBLE,
+                                A_TBS
+                                DOUBLE,
+                                A_PBCC
+                                DOUBLE,
+
+                                future_delta_k5
+                                DOUBLE,
+                                Z_k5
+                                DOUBLE,
+                                J_k5_z2p0
+                                INTEGER,
+
+                                future_delta_k10
+                                DOUBLE,
+                                Z_k10
+                                DOUBLE,
+                                J_k10_z2p0
+                                INTEGER,
+
+                                created_at
+                                TIMESTAMP
+                                DEFAULT
+                                CURRENT_TIMESTAMP,
+
+                                PRIMARY
+                                KEY
+                            (
+                                experiment_id,
+                                injection_type,
+                                iteration_id,
+                                step
+                            )
+                                );
+                            """)
+                con.execute("""
+                            CREATE TABLE IF NOT EXISTS online_mitigation_steps
+                            (
+                                experiment_id
+                                VARCHAR
+                                NOT
+                                NULL,
+                                injection_type
+                                VARCHAR
+                                NOT
+                                NULL,
+                                iteration_id
+                                VARCHAR
+                                NOT
+                                NULL,
+                                step
+                                INTEGER
+                                NOT
+                                NULL,
+
+                                mitigation_enabled
+                                INTEGER,
+                                mitigation_condition
+                                VARCHAR,
+                                mitigation_budget
+                                DOUBLE,
+
+                                alarm_triggered
+                                INTEGER,
+                                mitigation_removed
+                                INTEGER,
+
+                                used_mitigation_cost
+                                DOUBLE,
+                                removed_mitigation_count
+                                INTEGER,
+
+                                last_removed_edge_label
+                                VARCHAR,
+                                last_removed_edge_cost
+                                DOUBLE,
+                                last_removed_edge_advantage
+                                DOUBLE,
+                                last_removed_edge_score
+                                DOUBLE,
+
+                                created_at
+                                TIMESTAMP
+                                DEFAULT
+                                CURRENT_TIMESTAMP,
+
+                                PRIMARY
+                                KEY
+                            (
+                                experiment_id,
+                                injection_type,
+                                iteration_id,
+                                step
+                            )
+                                );
+                            """)
+                con.register("mitigation_df", mitigation_df)
+
+                con.execute("""
+                        INSERT OR REPLACE INTO online_mitigation_steps (
+                            experiment_id,
+                            injection_type,
+                            iteration_id,
+                            step,
+
+                            mitigation_enabled,
+                            mitigation_condition,
+                            mitigation_budget,
+
+                            alarm_triggered,
+                            mitigation_removed,
+
+                            used_mitigation_cost,
+                            removed_mitigation_count,
+
+                            last_removed_edge_label,
+                            last_removed_edge_cost,
+                            last_removed_edge_advantage,
+                            last_removed_edge_score,
+
+                            created_at
+                        )
+                        SELECT
+                            experiment_id,
+                            injection_type,
+                            iteration_id,
+                            step,
+
+                            mitigation_enabled,
+                            mitigation_condition,
+                            mitigation_budget,
+
+                            alarm_triggered,
+                            mitigation_removed,
+
+                            used_mitigation_cost,
+                            removed_mitigation_count,
+
+                            last_removed_edge_label,
+                            last_removed_edge_cost,
+                            last_removed_edge_advantage,
+                            last_removed_edge_score,
+
+                            CURRENT_TIMESTAMP
+                        FROM mitigation_df;
+                    """)
+                con.execute("""
+                            CREATE TABLE IF NOT EXISTS experiment_summary_stats
+                            (
+                                experiment_id
+                                VARCHAR
+                                NOT
+                                NULL,
+                                injection_type
+                                VARCHAR
+                                NOT
+                                NULL,
+                                p
+                                DOUBLE
+                                NOT
+                                NULL,
+                                mu_X
+                                DOUBLE,
+                                sigma2_X
+                                DOUBLE,
+                                is_p_star
+                                BOOLEAN,
+                                p_star
+                                DOUBLE,
+                                created_at
+                                TIMESTAMP
+                                DEFAULT
+                                CURRENT_TIMESTAMP,
+                                PRIMARY
+                                KEY
+                            (
+                                experiment_id,
+                                injection_type,
+                                p
+                            )
+                                );
+                            """)
+
+                con.execute("""
+                        INSERT OR REPLACE INTO experiments (
+                            experiment_id, experiment_name, base_graph_id, base_graph_name,
+                            regime_id, injection_type, mode, seed_number,
+                            initial_misconfig, description
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                    """, [
+                    experiment_id, experiment_name, base_graph_id, base_graph_name,
+                    regime_id, injection_type, mode, seed_number,
+                    initial_misconfig, notes,
+                ])
+
+                iteration_rows = []
+                for itr in sorted(misconfig_metrics_per_itr.keys()):
+                    iteration_rows.append({
+                        "experiment_id": experiment_id,
+                        "iteration_id": f"iter_{itr}",
+                        "seed": seed_number,
+                        "injection_schedule_name": injection_schedule_name,
+                        "initial_misconfig": initial_misconfig,
+                        "notes": notes,
+                    })
+
+                iteration_df = pd.DataFrame(iteration_rows)
+
+                con.register("iteration_df", iteration_df)
+                con.execute("""
+                        INSERT OR REPLACE INTO experiment_iterations
+                        SELECT
+                            experiment_id,
+                            iteration_id,
+                            seed,
+                            injection_schedule_name,
+                            initial_misconfig,
+                            notes,
+                            CURRENT_TIMESTAMP
+                        FROM iteration_df;
                     """)
 
-        con.execute("""
-                    CREATE TABLE IF NOT EXISTS experiment_iterations
-                    (
-                        experiment_id
-                        VARCHAR
-                        NOT
-                        NULL,
-                        iteration_id
-                        VARCHAR
-                        NOT
-                        NULL,
-                        seed
-                        INTEGER,
-                        injection_schedule_name
-                        VARCHAR,
-                        initial_misconfig
-                        BOOLEAN,
-                        notes
-                        VARCHAR,
-                        created_at
-                        TIMESTAMP
-                        DEFAULT
-                        CURRENT_TIMESTAMP,
-                        PRIMARY
-                        KEY
-                    (
-                        experiment_id,
-                        iteration_id
-                    )
-                        );
-                    """)
-
-        con.execute("""
-                    CREATE TABLE IF NOT EXISTS metric_steps
-                    (
-                        experiment_id
-                        VARCHAR
-                        NOT
-                        NULL,
-                        iteration_id
-                        VARCHAR
-                        NOT
-                        NULL,
-                        step
-                        INTEGER
-                        NOT
-                        NULL,
-                        injection_type
-                        VARCHAR
-                        NOT
-                        NULL,
-                        reachable_users
-                        VARCHAR,
-                        new_reachable_users
-                        VARCHAR,
-                        reachable_comps
-                        VARCHAR,
-                        new_reachable_comps_names
-                        VARCHAR,
-                        reachable_comps_names
-                        VARCHAR,
-
-                        reachable_users_count
-                        INTEGER,
-                        reachable_comps_count
-                        INTEGER,
-
-                        p
-                        DOUBLE,
-                        X
-                        DOUBLE,
-                        X_users
-                        DOUBLE,
-                        X_comps
-                        DOUBLE,
-
-                        HCI
-                        DOUBLE,
-                        CSM
-                        DOUBLE,
-                        TBS
-                        DOUBLE,
-                        PBCC
-                        DOUBLE,
-                        delta_X
-                        DOUBLE,
-
-                        rise_flag_HCI
-                        INTEGER,
-                        rise_streak_HCI
-                        INTEGER,
-                        rise_total_HCI
-                        INTEGER,
-
-                        rise_flag_CSM
-                        INTEGER,
-                        rise_streak_CSM
-                        INTEGER,
-                        rise_total_CSM
-                        INTEGER,
-
-                        rise_flag_TBS
-                        INTEGER,
-                        rise_streak_TBS
-                        INTEGER,
-                        rise_total_TBS
-                        INTEGER,
-
-                        A_HCI
-                        DOUBLE,
-                        A_CSM
-                        DOUBLE,
-                        A_TBS
-                        DOUBLE,
-                        A_PBCC
-                        DOUBLE,
-
-                        future_delta_k5
-                        DOUBLE,
-                        Z_k5
-                        DOUBLE,
-                        J_k5_z2p0
-                        INTEGER,
-
-                        future_delta_k10
-                        DOUBLE,
-                        Z_k10
-                        DOUBLE,
-                        J_k10_z2p0
-                        INTEGER,
-
-                        created_at
-                        TIMESTAMP
-                        DEFAULT
-                        CURRENT_TIMESTAMP,
-
-                        PRIMARY
-                        KEY
-                    (
-                        experiment_id,
-                        injection_type,
-                        iteration_id,
-                        step
-                    )
-                        );
-                    """)
-
-        con.execute("""
-                    CREATE TABLE IF NOT EXISTS experiment_summary_stats
-                    (
-                        experiment_id
-                        VARCHAR
-                        NOT
-                        NULL,
-                        injection_type
-                        VARCHAR
-                        NOT
-                        NULL,
-                        p
-                        DOUBLE
-                        NOT
-                        NULL,
-                        mu_X
-                        DOUBLE,
-                        sigma2_X
-                        DOUBLE,
-                        is_p_star
-                        BOOLEAN,
-                        p_star
-                        DOUBLE,
-                        created_at
-                        TIMESTAMP
-                        DEFAULT
-                        CURRENT_TIMESTAMP,
-                        PRIMARY
-                        KEY
-                    (
-                        experiment_id,
-                        injection_type,
-                        p
-                    )
-                        );
-                    """)
-
-        con.execute("""
-            INSERT OR REPLACE INTO experiments (
-                experiment_id, experiment_name, base_graph_id, base_graph_name,
-                regime_id, injection_type, mode, seed_number,
-                initial_misconfig, description
+                con.register("master_df", master_df)
+                con.execute("""
+                        INSERT OR REPLACE INTO metric_steps (
+                experiment_id, iteration_id, step, injection_type,injection,
+                reachable_users, new_reachable_users,
+                reachable_comps, new_reachable_comps_names, reachable_comps_names,
+                reachable_users_count, reachable_comps_count,
+                p, X, X_users, X_comps,
+                HCI, CSM, TBS, PBCC, delta_X,
+                rise_flag_HCI, rise_streak_HCI, rise_total_HCI,
+                rise_flag_CSM, rise_streak_CSM, rise_total_CSM,
+                rise_flag_TBS, rise_streak_TBS, rise_total_TBS,
+                A_HCI, A_CSM, A_TBS, A_PBCC,
+                future_delta_k5, Z_k5, J_k5_z2p0,
+                future_delta_k10, Z_k10, J_k10_z2p0,
+                created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
-        """, [
-            experiment_id, experiment_name, base_graph_id, base_graph_name,
-            regime_id, injection_type, mode, seed_number,
-            initial_misconfig, notes,
-        ])
-
-        iteration_rows = []
-        for itr in sorted(misconfig_metrics_per_itr.keys()):
-            iteration_rows.append({
-                "experiment_id": experiment_id,
-                "iteration_id": f"iter_{itr}",
-                "seed": seed_number,
-                "injection_schedule_name": injection_schedule_name,
-                "initial_misconfig": initial_misconfig,
-                "notes": notes,
-            })
-
-        iteration_df = pd.DataFrame(iteration_rows)
-
-        con.register("iteration_df", iteration_df)
-        con.execute("""
-            INSERT OR REPLACE INTO experiment_iterations
             SELECT
-                experiment_id,
-                iteration_id,
-                seed,
-                injection_schedule_name,
-                initial_misconfig,
-                notes,
+                experiment_id, iteration_id, step, injection_type,injection,
+                reachable_users, new_reachable_users,
+                reachable_comps, new_reachable_comps_names, reachable_comps_names,
+                reachable_users_count, reachable_comps_count,
+                p, X, X_users, X_comps,
+                HCI, CSM, TBS, PBCC, delta_X,
+                rise_flag_HCI, rise_streak_HCI, rise_total_HCI,
+                rise_flag_CSM, rise_streak_CSM, rise_total_CSM,
+                rise_flag_TBS, rise_streak_TBS, rise_total_TBS,
+                A_HCI, A_CSM, A_TBS, A_PBCC,
+                future_delta_k5, Z_k5, J_k5_z2p0,
+                future_delta_k10, Z_k10, J_k10_z2p0,
                 CURRENT_TIMESTAMP
-            FROM iteration_df;
-        """)
-
-        con.register("master_df", master_df)
-        con.execute("""
-            INSERT OR REPLACE INTO metric_steps (
-    experiment_id, iteration_id, step, injection_type,injection,
-    reachable_users, new_reachable_users,
-    reachable_comps, new_reachable_comps_names, reachable_comps_names,
-    reachable_users_count, reachable_comps_count,
-    p, X, X_users, X_comps,
-    HCI, CSM, TBS, PBCC, delta_X,
-    rise_flag_HCI, rise_streak_HCI, rise_total_HCI,
-    rise_flag_CSM, rise_streak_CSM, rise_total_CSM,
-    rise_flag_TBS, rise_streak_TBS, rise_total_TBS,
-    A_HCI, A_CSM, A_TBS, A_PBCC,
-    future_delta_k5, Z_k5, J_k5_z2p0,
-    future_delta_k10, Z_k10, J_k10_z2p0,
-    created_at
-)
-SELECT
-    experiment_id, iteration_id, step, injection_type,injection,
-    reachable_users, new_reachable_users,
-    reachable_comps, new_reachable_comps_names, reachable_comps_names,
-    reachable_users_count, reachable_comps_count,
-    p, X, X_users, X_comps,
-    HCI, CSM, TBS, PBCC, delta_X,
-    rise_flag_HCI, rise_streak_HCI, rise_total_HCI,
-    rise_flag_CSM, rise_streak_CSM, rise_total_CSM,
-    rise_flag_TBS, rise_streak_TBS, rise_total_TBS,
-    A_HCI, A_CSM, A_TBS, A_PBCC,
-    future_delta_k5, Z_k5, J_k5_z2p0,
-    future_delta_k10, Z_k10, J_k10_z2p0,
-    CURRENT_TIMESTAMP
-FROM master_df;
-        """)
-
-        con.register("summary_df", summary_df)
-        con.execute("""
-            INSERT OR REPLACE INTO experiment_summary_stats (
-                experiment_id,
-                injection_type,
-                p,
-                mu_X,
-                sigma2_X,
-                is_p_star,
-                p_star
-            )
-            SELECT
-                experiment_id,
-                injection_type,
-                p,
-                mu_X,
-                sigma2_X,
-                is_p_star,
-                p_star
-            FROM summary_df;
-        """)
-
-        con.execute("""
-                    CREATE
-                    OR REPLACE VIEW v_metric_steps AS
-                    SELECT e.experiment_name,
-                           e.base_graph_id,
-                           e.base_graph_name,
-                           e.regime_id,
-                           e.injection_type,
-                           e.mode,
-                           e.seed_number,
-                           i.injection_schedule_name,
-                           i.initial_misconfig,
-                           m.*
-                    FROM metric_steps m
-                             LEFT JOIN experiment_iterations i
-                                       ON m.experiment_id = i.experiment_id
-                                           AND m.iteration_id = i.iteration_id
-                             LEFT JOIN experiments e
-                                       ON m.experiment_id = e.experiment_id;
+            FROM master_df;
                     """)
 
-        con.execute("""
-                    CREATE
-                    OR REPLACE VIEW v_experiment_summary_stats AS
-                    SELECT e.experiment_name,
-                           e.base_graph_id,
-                           e.base_graph_name,
-                           e.regime_id,
-                           e.injection_type,
-                           e.mode,
-                           s.*
-                    FROM experiment_summary_stats s
-                             LEFT JOIN experiments e
-                                       ON s.experiment_id = e.experiment_id;
+                con.register("summary_df", summary_df)
+                con.execute("""
+                        INSERT OR REPLACE INTO experiment_summary_stats (
+                            experiment_id,
+                            injection_type,
+                            p,
+                            mu_X,
+                            sigma2_X,
+                            is_p_star,
+                            p_star
+                        )
+                        SELECT
+                            experiment_id,
+                            injection_type,
+                            p,
+                            mu_X,
+                            sigma2_X,
+                            is_p_star,
+                            p_star
+                        FROM summary_df;
                     """)
 
-        con.close()
+                con.execute("""
+                            CREATE
+                            OR REPLACE VIEW v_metric_steps AS
+                            SELECT e.experiment_name,
+                                   e.base_graph_id,
+                                   e.base_graph_name,
+                                   e.regime_id,
+                                   e.injection_type,
+                                   e.mode,
+                                   e.seed_number,
+                                   i.injection_schedule_name,
+                                   i.initial_misconfig,
+                                   m.*
+                            FROM metric_steps m
+                                     LEFT JOIN experiment_iterations i
+                                               ON m.experiment_id = i.experiment_id
+                                                   AND m.iteration_id = i.iteration_id
+                                     LEFT JOIN experiments e
+                                               ON m.experiment_id = e.experiment_id;
+                            """)
+                con.execute("""
+                            CREATE
+                            OR REPLACE VIEW v_metric_steps_with_mitigation AS
+                            SELECT v.*,
+
+                                   ms.mitigation_enabled,
+                                   ms.mitigation_condition,
+                                   ms.mitigation_budget,
+                                   ms.alarm_triggered,
+                                   ms.mitigation_removed,
+                                   ms.used_mitigation_cost,
+                                   ms.removed_mitigation_count,
+                                   ms.last_removed_edge_label,
+                                   ms.last_removed_edge_cost,
+                                   ms.last_removed_edge_advantage,
+                                   ms.last_removed_edge_score
+
+                            FROM v_metric_steps v
+                                     LEFT JOIN online_mitigation_steps ms
+                                               ON v.experiment_id = ms.experiment_id
+                                                   AND v.injection_type = ms.injection_type
+                                                   AND v.iteration_id = ms.iteration_id
+                                                   AND v.step = ms.step;
+                            """)
+                con.execute("""
+                            CREATE
+                            OR REPLACE VIEW v_experiment_summary_stats AS
+                            SELECT e.experiment_name,
+                                   e.base_graph_id,
+                                   e.base_graph_name,
+                                   e.regime_id,
+                                   e.injection_type,
+                                   e.mode,
+                                   s.*
+                            FROM experiment_summary_stats s
+                                     LEFT JOIN experiments e
+                                               ON s.experiment_id = e.experiment_id;
+                            """)
+            except Exception as e:
+                print(f"Lock error {e}")
+            finally:
+                con.close()
 
         print(f"Exported all runs to DuckDB: {duckdb_path}")
         print(f"Exported master CSV: {main_csv_path}")
@@ -1770,3 +1962,388 @@ FROM master_df;
         print(f"Summary rows exported: {len(summary_df)}")
     except Exception as e:
         print(e)
+
+
+def classify_transition_from_delta( j_value):
+    """
+    Bucket transition strength from maximum exposure jump.
+    j_value can be max delta X or max delta mu_X.
+    """
+    if j_value is None or pd.isna(j_value):
+        return "unknown"
+
+    if j_value < 0.02:
+        return "no_transition"
+    elif j_value < 0.05:
+        return "weak_transition"
+    elif j_value < 0.10:
+        return "moderate_transition"
+    else:
+        return "strong_transition"
+
+
+def analyse_percolation_from_duckdb(
+        db_path,
+        out_dir="analysis/csv",
+
+        start_time=None,
+        end_time=None,
+        graph_name_filter=None,
+        schedule_filter=None,
+        injection_type_filter=None,
+        initial_misconfig_filter=None,
+        min_realisations=2,
+):
+    """
+    Percolation analysis from DuckDB.
+
+    Levels:
+    1. Seed-level:
+       For each graph seed, compute mu_X over injection iterations.
+       Bucket that seed using max delta mu_X.
+
+    2. Configuration-level:
+       Across all seeds and iterations, compute mu_X(p), sigma2_X(p),
+       delta_mu_X(p), and p_star.
+
+    Time filtering:
+       Analyse only experiments whose metric rows were created between
+       start_time and end_time.
+    """
+
+    import duckdb
+    import pandas as pd
+    from pathlib import Path
+    os.makedirs(os.path.dirname(db_path), exist_ok=True)
+    Path(out_dir).mkdir(parents=True, exist_ok=True)
+
+    con = duckdb.connect(db_path)
+
+    where_clauses = ["X IS NOT NULL"]
+
+    if start_time is not None:
+        where_clauses.append(f"created_at >= TIMESTAMP '{start_time}'")
+
+    if end_time is not None:
+        where_clauses.append(f"created_at <= TIMESTAMP '{end_time}'")
+
+    if graph_name_filter is not None:
+        where_clauses.append(f"base_graph_name LIKE '%{graph_name_filter}%'")
+
+    if schedule_filter is not None:
+        where_clauses.append(f"injection_schedule_name LIKE '%{schedule_filter}%'")
+
+    if injection_type_filter is not None:
+        where_clauses.append(f"injection_type = '{injection_type_filter}'")
+
+    if initial_misconfig_filter is not None:
+        val = "TRUE" if initial_misconfig_filter else "FALSE"
+        where_clauses.append(f"initial_misconfig = {val}")
+
+    where_sql = " AND ".join(where_clauses)
+
+    query = f"""
+        SELECT
+            experiment_id,
+            experiment_name,
+            base_graph_id,
+            base_graph_name,
+            regime_id,
+            seed_number,
+            injection_type,
+            injection_schedule_name,
+            initial_misconfig,
+            mode,
+            iteration_id,
+            step,
+            p,
+            X,
+            delta_X,
+            created_at
+        FROM v_metric_steps
+        WHERE {where_sql}
+        ORDER BY
+            base_graph_name,
+            initial_misconfig,
+            injection_schedule_name,
+            injection_type,
+            seed_number,
+            iteration_id,
+            step
+    """
+
+    df = con.execute(query).df()
+    con.close()
+
+    if df.empty:
+        print("No metric rows found for the selected filters/time window.")
+        return None
+
+    print(f"Rows selected for percolation analysis: {len(df)}")
+    print(f"Start time: {start_time}")
+    print(f"End time  : {end_time}")
+
+    # Ensure numeric columns are clean
+    for col in ["seed_number", "step", "p", "X", "delta_X"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    df = df.dropna(subset=["seed_number", "step", "p", "X"])
+
+    # ------------------------------------------------------------------
+    # 1. Seed-level mean exposure curve:
+    #    mu_{X,g}(p_i) = mean over injection iterations for each seed
+    # ------------------------------------------------------------------
+
+    seed_group_cols = [
+        "base_graph_name",
+        "initial_misconfig",
+        "injection_schedule_name",
+        "injection_type",
+        "seed_number",
+        "step",
+        "p",
+    ]
+
+    seed_mu = (
+        df.groupby(seed_group_cols, as_index=False)
+        .agg(
+            mu_x_seed=("X", "mean"),
+            sigma2_x_seed=("X", "var"),
+            n_seed_iterations=("X", "count"),
+        )
+    )
+
+    seed_mu["sigma2_x_seed"] = seed_mu["sigma2_x_seed"].fillna(0.0)
+
+    seed_mu = seed_mu.sort_values([
+        "base_graph_name",
+        "initial_misconfig",
+        "injection_schedule_name",
+        "injection_type",
+        "seed_number",
+        "step",
+    ])
+
+    seed_mu["delta_mu_x_seed"] = (
+        seed_mu.groupby([
+            "base_graph_name",
+            "initial_misconfig",
+            "injection_schedule_name",
+            "injection_type",
+            "seed_number",
+        ])["mu_x_seed"]
+        .diff()
+        .fillna(0.0)
+    )
+
+    # ------------------------------------------------------------------
+    # 2. Seed-level bucket summary:
+    #    Bucket each seed using max delta mu_X for that seed
+    # ------------------------------------------------------------------
+
+    seed_summary_rows = []
+
+    seed_summary_group_cols = [
+        "base_graph_name",
+        "initial_misconfig",
+        "injection_schedule_name",
+        "injection_type",
+        "seed_number",
+    ]
+
+    for keys, g in seed_mu.groupby(seed_summary_group_cols):
+        idx_jump = g["delta_mu_x_seed"].idxmax()
+        idx_var = g["sigma2_x_seed"].idxmax()
+
+        max_delta_mu = float(g.loc[idx_jump, "delta_mu_x_seed"])
+        bucket = classify_transition_from_delta(max_delta_mu)
+
+        row = dict(zip(seed_summary_group_cols, keys))
+        row.update({
+            "max_delta_mu_x_seed": max_delta_mu,
+            "p_jump_seed": float(g.loc[idx_jump, "p"]),
+            "jump_step_seed": int(g.loc[idx_jump, "step"]),
+            "seed_p_star_variance": float(g.loc[idx_var, "p"]),
+            "seed_max_sigma2_x": float(g.loc[idx_var, "sigma2_x_seed"]),
+            "seed_bucket": bucket,
+            "seed_is_percolation_like": bucket in [
+                "moderate_transition",
+                "strong_transition",
+            ],
+            "mean_final_mu_x_seed": float(
+                g[g["step"] == g["step"].max()]["mu_x_seed"].mean()
+            ),
+            "n_steps": int(g["step"].nunique()),
+            "mean_iterations_per_step": float(g["n_seed_iterations"].mean()),
+        })
+
+        seed_summary_rows.append(row)
+
+    seed_summary = pd.DataFrame(seed_summary_rows)
+
+    # ------------------------------------------------------------------
+    # 3. Configuration-level mu/sigma:
+    #    Across all seeds and iterations for same config/schedule/type
+    # ------------------------------------------------------------------
+
+    config_group_cols = [
+        "base_graph_name",
+        "initial_misconfig",
+        "injection_schedule_name",
+        "injection_type",
+        "step",
+        "p",
+    ]
+
+    config_stats = (
+        df.groupby(config_group_cols, as_index=False)
+        .agg(
+            mu_x=("X", "mean"),
+            sigma2_x=("X", "var"),
+            n_realisations=("X", "count"),
+            n_seeds=("seed_number", "nunique"),
+            n_iterations=("iteration_id", "nunique"),
+        )
+    )
+
+    config_stats["sigma2_x"] = config_stats["sigma2_x"].fillna(0.0)
+
+    config_stats = config_stats.sort_values([
+        "base_graph_name",
+        "initial_misconfig",
+        "injection_schedule_name",
+        "injection_type",
+        "step",
+    ])
+
+    config_stats["delta_mu_x"] = (
+        config_stats.groupby([
+            "base_graph_name",
+            "initial_misconfig",
+            "injection_schedule_name",
+            "injection_type",
+        ])["mu_x"]
+        .diff()
+        .fillna(0.0)
+    )
+
+    # Mark whether enough realisations exist for variance interpretation
+    config_stats["variance_reliable"] = (
+            config_stats["n_realisations"] >= min_realisations
+    )
+
+    # ------------------------------------------------------------------
+    # 4. Configuration-level summary:
+    #    p_star, max delta mu, vulnerable seeds
+    # ------------------------------------------------------------------
+
+    config_summary_rows = []
+
+    config_summary_group_cols = [
+        "base_graph_name",
+        "initial_misconfig",
+        "injection_schedule_name",
+        "injection_type",
+    ]
+
+    for keys, g in config_stats.groupby(config_summary_group_cols):
+        base_graph_name, initial_misconfig, schedule, injection_type = keys
+
+        reliable_g = g[g["variance_reliable"]].copy()
+        if reliable_g.empty:
+            reliable_g = g.copy()
+
+        idx_var = reliable_g["sigma2_x"].idxmax()
+        idx_mu = g["delta_mu_x"].idxmax()
+
+        matching_seed_rows = seed_summary[
+            (seed_summary["base_graph_name"] == base_graph_name) &
+            (seed_summary["initial_misconfig"] == initial_misconfig) &
+            (seed_summary["injection_schedule_name"] == schedule) &
+            (seed_summary["injection_type"] == injection_type)
+            ]
+
+        total_seeds = matching_seed_rows["seed_number"].nunique()
+        vulnerable_seeds = matching_seed_rows[
+            matching_seed_rows["seed_is_percolation_like"]
+        ]["seed_number"].nunique()
+
+        max_delta_mu = float(g.loc[idx_mu, "delta_mu_x"])
+        config_bucket = classify_transition_from_delta(max_delta_mu)
+
+        config_summary_rows.append({
+            "base_graph_name": base_graph_name,
+            "initial_misconfig": initial_misconfig,
+            "injection_schedule_name": schedule,
+            "injection_type": injection_type,
+
+            "total_seeds": int(total_seeds),
+            "vulnerable_seeds": int(vulnerable_seeds),
+            "seed_vulnerability_rate": (
+                vulnerable_seeds / total_seeds if total_seeds else 0.0
+            ),
+
+            "p_star_variance": float(reliable_g.loc[idx_var, "p"]),
+            "step_star_variance": int(reliable_g.loc[idx_var, "step"]),
+            "max_sigma2_x": float(reliable_g.loc[idx_var, "sigma2_x"]),
+
+            "p_max_delta_mu": float(g.loc[idx_mu, "p"]),
+            "step_max_delta_mu": int(g.loc[idx_mu, "step"]),
+            "max_delta_mu_x": max_delta_mu,
+            "config_aggregate_bucket": config_bucket,
+
+            "mean_seed_max_delta_mu": float(
+                matching_seed_rows["max_delta_mu_x_seed"].mean()
+            ) if not matching_seed_rows.empty else None,
+
+            "max_seed_max_delta_mu": float(
+                matching_seed_rows["max_delta_mu_x_seed"].max()
+            ) if not matching_seed_rows.empty else None,
+
+            "mean_seed_final_x": float(
+                matching_seed_rows["mean_final_mu_x_seed"].mean()
+            ) if not matching_seed_rows.empty else None,
+
+            "min_n_realisations_per_p": int(g["n_realisations"].min()),
+            "max_n_realisations_per_p": int(g["n_realisations"].max()),
+        })
+
+    config_summary = pd.DataFrame(config_summary_rows)
+
+    # ------------------------------------------------------------------
+    # 5. Export outputs
+    # ------------------------------------------------------------------
+
+    suffix_parts = []
+
+    if graph_name_filter:
+        suffix_parts.append(str(graph_name_filter).replace(" ", "_"))
+
+    if schedule_filter:
+        suffix_parts.append(str(schedule_filter).replace(" ", "_"))
+
+    if injection_type_filter:
+        suffix_parts.append(str(injection_type_filter).replace(" ", "_"))
+
+    if start_time or end_time:
+        suffix_parts.append("time_filtered")
+
+    suffix = "_".join(suffix_parts) if suffix_parts else "all"
+
+    seed_mu_path = f"{out_dir}/percolation_seed_mu_{suffix}.csv"
+    seed_summary_path = f"{out_dir}/percolation_seed_buckets_{suffix}.csv"
+    config_stats_path = f"{out_dir}/percolation_config_mu_sigma_{suffix}.csv"
+    config_summary_path = f"{out_dir}/percolation_config_summary_{suffix}.csv"
+
+    seed_mu.to_csv(seed_mu_path, index=False)
+    seed_summary.to_csv(seed_summary_path, index=False)
+    config_stats.to_csv(config_stats_path, index=False)
+    config_summary.to_csv(config_summary_path, index=False)
+
+    print(f"Saved seed mu curves: {seed_mu_path}")
+    print(f"Saved seed buckets: {seed_summary_path}")
+    print(f"Saved config mu/sigma: {config_stats_path}")
+    print(f"Saved config summary: {config_summary_path}")
+
+    return seed_mu, seed_summary, config_stats, config_summary

@@ -71,7 +71,7 @@ from adsynth.templates.groups import get_departments_list
 from adsynth.utils.ablation_study_utils import indicators_hci_csm_tbs, exposure_X, populate_node_tiers, compute_mu, \
     compute_sigma2, \
     compute_delta_X, exposure_users, exposure_computers, pbcc_bounded_bfs_tier2_computers_debug, rows_from_run_metrics, \
-    compute_rise_metrics
+    compute_rise_metrics, build_tier_caches
 from adsynth.utils.data import get_names_pool, get_surnames_pool, get_parameters_from_json, get_domains_pool
 from adsynth.utils.database_utils import init_experiment_state, restore_experiment_state, save_experiment_state, \
     clear_exp_neo4j_db, update_graph_db_with_temp_file, save_all_experiment_states_to_json, load_graph_from_file, \
@@ -80,9 +80,11 @@ from adsynth.utils.domains import get_domain_dn
 from adsynth.utils.misconfig_utils import tabulate_experiment_results
 from adsynth.utils.mitigation_utils import run_cost_aware_mitigation_from_metrics
 from adsynth.utils.networkx_utils import create_networkx_graph, find_user_count_with_path_to_DA
+from adsynth.utils.online_mitigation_utils import apply_online_mitigation_if_triggered
 from adsynth.utils.parameters import print_all_parameters, get_int_param_value, get_perc_param_value, \
     get_dict_param_value
-from adsynth.utils.plot_utils import plot_plot_chart, export_experiment_to_duckdb_and_csv
+from adsynth.utils.plot_utils import plot_plot_chart, export_experiment_to_duckdb_and_csv, \
+    analyse_percolation_from_duckdb
 from adsynth.utils.prediction_utils import calc_thresholds_and_jump_labels_for_iteration
 
 
@@ -246,7 +248,7 @@ class MainMenu(cmd.Cmd):
         self.mitigation_enabled = False
 
         # R realizations - iterations as of now
-        self.R = 10
+        self.R = 20
         cmd.Cmd.__init__(self)
         logging.basicConfig(
             filename="app.log",
@@ -986,7 +988,89 @@ class MainMenu(cmd.Cmd):
 
         self.do_generate(args)
         populate_node_tiers()
+        build_tier_caches()
 
+    DATA_COLLECTION_SEEDS = [290]
+
+    DATA_COLLECTION_VARIANTS = {
+        "with_misconfig": True,
+        # "without_misconfig": False,
+    }
+
+    DATA_COLLECTION_GRAPHS = {
+        # "set_1": {
+        #     "vul_1k": "/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/adsynth/experiment_params/vul_1k.json",
+        #     "secure_1k": "/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/adsynth/experiment_params/secure_1k.json",
+        # },
+        "set_2": {
+            # "vul_5k": "/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/adsynth/experiment_params/vul_5k.json",
+            # "secure_5k": "/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/adsynth/experiment_params/secure_5k.json",
+        },
+        "set_3": {
+            "vul_100k": "/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/adsynth/experiment_params/vul_100k.json",
+            # "secure_100k": "/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/adsynth/experiment_params/secure_100k.json",
+        },
+    }
+
+    DATA_COLLECTION_SCHEDULES = {
+        # "session": ["session"],
+        # "session_permission": ["session", "i_perm", "g_perm"],
+        "session_permission_nesting": ["session", "i_perm", "g_perm", "nesting"],
+    }
+
+    def run_data_collection(self):
+        """
+        Runs:
+        - Set 1: Vul 1K, Secure 1K
+        - Set 2: Vul 5K, Secure 5K
+        - Seeds: 1, 2, 4, 8, 16
+        - Variants: with / without initial misconfig
+        - Schedules:
+            1. Session
+            2. Session + Permission
+            3. Session + Permission + Nesting
+        """
+
+        for set_name, graph_paths in self.DATA_COLLECTION_GRAPHS.items():
+            for graph_name, json_path in graph_paths.items():
+                for seed in self.DATA_COLLECTION_SEEDS:
+                    for variant_name, misconfig_enabled in self.DATA_COLLECTION_VARIANTS.items():
+                        for schedule_name, run_sequence in self.DATA_COLLECTION_SCHEDULES.items():
+                            print("=" * 80)
+                            print(f"Set              : {set_name}")
+                            print(f"Graph            : {graph_name}")
+                            print(f"JSON             : {json_path}")
+                            print(f"Seed             : {seed}")
+                            print(f"Initial variant  : {variant_name}")
+                            print(f"Schedule         : {schedule_name}")
+                            print(f"Run sequence     : {run_sequence}")
+                            print("=" * 80)
+
+                            self.seed_number = seed
+                            self.misconfig_enabled = misconfig_enabled
+
+                            self.do_initialise_AD_graph_from_json(
+                                f"{json_path} {self.level}"
+                            )
+
+                            self.experiment_id = (
+                                f"exp_{graph_name}_{variant_name}_{schedule_name}_"
+                                f"seed_{seed}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+                            )
+
+                            self.experiment_name = (
+                                f"{graph_name} | {variant_name} | "
+                                f"{schedule_name} | seed={seed}"
+                            )
+
+                            self.run_injection_schedule(
+                                schedule_type="sequence",
+                                mitigation_enabled=False,
+                                run_sequence=run_sequence
+                            )
+
+    def do_collect_data(self, args):
+            self.run_data_collection()
     def do_isolated_injection(self, args):
         injection_type = input("Injection Type [session/i_perm/g_perm/nesting]  : ")
         args = "isolated"
@@ -1039,13 +1123,76 @@ class MainMenu(cmd.Cmd):
                 self.experiment_name = "Group nesting misconfiguration experiment"
             self.grp_nesting_injection(mode)
 
+    def do_runmodels(self, args):
+
+        passed = args
+
+        if passed != "":
+            try:
+                csv_folder = passed
+
+                self.run_all_csvs(
+                    folder_path=csv_folder,
+                    label_col="J_k5_z2p0",
+                    threshold=0.5
+                )
+
+                return
+
+            except ValueError:
+                pass
+
+        csv_folder = self.m.input_default(
+            "CSV folder path",
+            "analysis/csv"
+        )
+
+        self.run_all_csvs(
+            folder_path=csv_folder,
+            label_col="J_k5_z2p0",
+            threshold=0.5
+        )
+    def run_all_csvs(
+            self,
+            folder_path,
+            label_col="J_k5_z2p0",
+            threshold=0.5
+    ):
+        folder = Path(folder_path)
+
+        csv_files = sorted(folder.glob("*.csv"))
+
+        if not csv_files:
+            print("No CSV files found")
+            return
+
+        for csv_path in csv_files:
+
+            print("=" * 80)
+            print(f"Running: {csv_path.name}")
+            print("=" * 80)
+
+            try:
+                self.run_model_suite_from_csv(
+                    csv_path=str(csv_path),
+                    label_col=label_col,
+                    threshold=0.5,
+                    generate_plots = False
+                )
+
+                print(f"Completed: {csv_path.name}")
+
+            except Exception as e:
+                print(f"Failed: {csv_path.name}")
+                print(e)
     def run_model_suite_from_csv(
             self,
             csv_path,
             label_col="J_k5_z2p0",
             out_dir="analysis/plots",
             db_path=str(Path.home() / "adsynth_metrics.duckdb"),
-            threshold=0.5
+            threshold=0.5,
+            generate_plots=False
     ):
         import os
         import pandas as pd
@@ -1077,22 +1224,34 @@ class MainMenu(cmd.Cmd):
         base_name = os.path.splitext(os.path.basename(csv_path))[0]
 
         model_specs = {
+            # Single feature models
             "M1_HCI_only": ["HCI"],
             "M2_CSM_only": ["CSM"],
             "M3_TBS_only": ["TBS"],
             "M4_PBCC_only": ["PBCC"],
 
-            "M5_exposure_metrics": ["HCI", "CSM", "TBS"],
+            # Two-feature combinations
+            "M5_HCI_CSM": ["HCI", "CSM"],
+            "M6_HCI_TBS": ["HCI", "TBS"],
+            "M7_HCI_PBCC": ["HCI", "PBCC"],
+            "M8_CSM_TBS": ["CSM", "TBS"],
+            "M9_CSM_PBCC": ["CSM", "PBCC"],
+            "M10_TBS_PBCC": ["TBS", "PBCC"],
 
-            "M6_all": ["HCI", "CSM", "TBS", "PBCC"],
-            "M7_HCI_TBS": ["HCI", "TBS"],
+            # Three-feature combinations
+            "M11_HCI_CSM_TBS": ["HCI", "CSM", "TBS"],
+            "M12_HCI_CSM_PBCC": ["HCI", "CSM", "PBCC"],
+            "M13_HCI_TBS_PBCC": ["HCI", "TBS", "PBCC"],
+            "M14_CSM_TBS_PBCC": ["CSM", "TBS", "PBCC"],
+
+            # Full combination
+            "M15_all": ["HCI", "CSM", "TBS", "PBCC"],
         }
-
         valid_df = df[df[label_col].notna()].copy()
         valid_df[label_col] = valid_df[label_col].astype(int)
-
-        fig_roc, ax_roc = plt.subplots(figsize=(8, 6))
-        fig_pr, ax_pr = plt.subplots(figsize=(8, 6))
+        if generate_plots:
+            fig_roc, ax_roc = plt.subplots(figsize=(8, 6))
+            fig_pr, ax_pr = plt.subplots(figsize=(8, 6))
 
         metrics_rows = []
         prediction_rows = []
@@ -1137,7 +1296,32 @@ class MainMenu(cmd.Cmd):
             clf.fit(X_train, y_train)
 
             y_prob = clf.predict_proba(X_test)[:, 1]
-            y_pred = (y_prob >= threshold).astype(int)
+            best_threshold = threshold
+
+
+            precisions, recalls, thresholds = precision_recall_curve(
+                    y_test,
+                    y_prob
+                )
+
+            best_f1 = -1
+
+            for t in thresholds:
+
+                temp_pred = (y_prob >= t).astype(int)
+
+                temp_f1 = f1_score(
+                    y_test,
+                    temp_pred,
+                    zero_division=0
+                )
+
+                if temp_f1 > best_f1:
+                    best_f1 = temp_f1
+                    best_threshold = float(t)
+
+
+            y_pred = (y_prob >= best_threshold).astype(int)
 
             test_eval_df = model_df.loc[idx_test].copy()
             test_eval_df["actual_label"] = y_test
@@ -1189,12 +1373,12 @@ class MainMenu(cmd.Cmd):
             accuracy = accuracy_score(y_test, y_pred)
 
             tn, fp, fn, tp = confusion_matrix(y_test, y_pred).ravel()
+            if generate_plots:
+                fpr, tpr, _ = roc_curve(y_test, y_prob)
+                ax_roc.plot(fpr, tpr, label=f"{model_name} (AUC={roc_auc:.3f})")
 
-            fpr, tpr, _ = roc_curve(y_test, y_prob)
-            ax_roc.plot(fpr, tpr, label=f"{model_name} (AUC={roc_auc:.3f})")
-
-            pr_precision, pr_recall, _ = precision_recall_curve(y_test, y_prob)
-            ax_pr.plot(pr_recall, pr_precision, label=f"{model_name} (AP={pr_auc:.3f})")
+                pr_precision, pr_recall, _ = precision_recall_curve(y_test, y_prob)
+                ax_pr.plot(pr_recall, pr_precision, label=f"{model_name} (AP={pr_auc:.3f})")
 
             metrics_rows.append({
                 "experiment_id": experiment_id,
@@ -1250,38 +1434,40 @@ class MainMenu(cmd.Cmd):
                     row["X"] = model_df.loc[row_idx, "X"]
 
                 prediction_rows.append(row)
+        if generate_plots:
 
-        ax_roc.plot([0, 1], [0, 1], linestyle="--")
-        ax_roc.set_xlabel("False Positive Rate")
-        ax_roc.set_ylabel("True Positive Rate")
-        ax_roc.set_title(f"ROC Curves ({label_col})")
-        ax_roc.legend()
-        fig_roc.tight_layout()
+                ax_roc.plot([0, 1], [0, 1], linestyle="--")
+                ax_roc.set_xlabel("False Positive Rate")
+                ax_roc.set_ylabel("True Positive Rate")
+                ax_roc.set_title(f"ROC Curves ({label_col})")
+                ax_roc.legend()
+                fig_roc.tight_layout()
 
-        roc_path = os.path.join(out_dir, f"{experiment_id}_ROC.png")
-        fig_roc.savefig(roc_path, dpi=300, bbox_inches="tight")
+                roc_path = os.path.join(out_dir, f"{experiment_id}_ROC.png")
+                fig_roc.savefig(roc_path, dpi=300, bbox_inches="tight")
 
-        baseline = valid_df[label_col].mean() if len(valid_df) else 0
-        ax_pr.axhline(baseline, linestyle="--", label=f"Baseline={baseline:.3f}")
-        ax_pr.set_xlabel("Recall")
-        ax_pr.set_ylabel("Precision")
-        ax_pr.set_title(f"PR Curves ({label_col})")
-        ax_pr.legend()
-        fig_pr.tight_layout()
+                baseline = valid_df[label_col].mean() if len(valid_df) else 0
+                ax_pr.axhline(baseline, linestyle="--", label=f"Baseline={baseline:.3f}")
+                ax_pr.set_xlabel("Recall")
+                ax_pr.set_ylabel("Precision")
+                ax_pr.set_title(f"PR Curves ({label_col})")
+                ax_pr.legend()
+                fig_pr.tight_layout()
 
-        pr_path = os.path.join(out_dir, f"{experiment_id}_PR.png")
-        fig_pr.savefig(pr_path, dpi=300, bbox_inches="tight")
+                pr_path = os.path.join(out_dir, f"{experiment_id}_PR.png")
+                fig_pr.savefig(pr_path, dpi=300, bbox_inches="tight")
 
         metrics_df = pd.DataFrame(metrics_rows)
         predictions_df = pd.DataFrame(prediction_rows)
 
-        plot_df = pd.DataFrame([{
-            "experiment_id": experiment_id,
-            "label_col": label_col,
-            "roc_plot_path": roc_path,
-            "pr_plot_path": pr_path,
-            "source_csv": csv_path,
-        }])
+        if generate_plots:
+                plot_df = pd.DataFrame([{
+                    "experiment_id": experiment_id,
+                    "label_col": label_col,
+                    "roc_plot_path": roc_path,
+                    "pr_plot_path": pr_path,
+                    "source_csv": csv_path,
+                }])
         try:
             import duckdb
 
@@ -1290,7 +1476,8 @@ class MainMenu(cmd.Cmd):
             # Register pandas DataFrames as DuckDB views
             con.register("metrics_df_view", metrics_df)
             con.register("predictions_df_view", predictions_df)
-            con.register("plot_df_view", plot_df)
+            if generate_plots:
+                con.register("plot_df_view", plot_df)
 
 
             con.execute("""
@@ -1376,7 +1563,7 @@ class MainMenu(cmd.Cmd):
                                                               tp,
                                                               fp,
                                                               tn,
-                                                              fn)
+                                                              fn,created_at)
                         SELECT experiment_id,
                                model_name,
                                features,
@@ -1392,7 +1579,8 @@ class MainMenu(cmd.Cmd):
                                positive_rate_test,
 
                                roc_auc,
-                               pr_auc, precision, recall, f1, accuracy, lead_time_avg, lead_time_median, detection_rate, tp, fp, tn, fn
+                               pr_auc, precision, recall, f1, accuracy, lead_time_avg, lead_time_median, detection_rate, tp, fp, tn, fn,CURRENT_TIMESTAMP
+        
                         FROM metrics_df_view
                         """)
 
@@ -1450,45 +1638,46 @@ class MainMenu(cmd.Cmd):
                         X
                     FROM predictions_df_view
                 """)
+            if generate_plots:
+                    con.execute("""
+                        CREATE TABLE IF NOT EXISTS prediction_plot_paths (
+                            experiment_id VARCHAR,
+                            label_col VARCHAR,
+                            roc_plot_path VARCHAR,
+                            pr_plot_path VARCHAR,
+                            source_csv VARCHAR
+                        )
+                    """)
 
-            con.execute("""
-                CREATE TABLE IF NOT EXISTS prediction_plot_paths (
-                    experiment_id VARCHAR,
-                    label_col VARCHAR,
-                    roc_plot_path VARCHAR,
-                    pr_plot_path VARCHAR,
-                    source_csv VARCHAR
-                )
-            """)
-
-            con.execute("""
-                INSERT INTO prediction_plot_paths (
-                    experiment_id,
-                    label_col,
-                    roc_plot_path,
-                    pr_plot_path,
-                    source_csv
-                )
-                SELECT
-                    experiment_id,
-                    label_col,
-                    roc_plot_path,
-                    pr_plot_path,
-                    source_csv
-                FROM plot_df_view
-            """)
+                    con.execute("""
+                        INSERT INTO prediction_plot_paths (
+                            experiment_id,
+                            label_col,
+                            roc_plot_path,
+                            pr_plot_path,
+                            source_csv
+                        )
+                        SELECT
+                            experiment_id,
+                            label_col,
+                            roc_plot_path,
+                            pr_plot_path,
+                            source_csv
+                        FROM plot_df_view
+                    """)
 
             con.close()
 
         except Exception as e:
             print("DuckDB export failed:", e)
 
-
-        print(f"Saved ROC plot: {roc_path}")
-        print(f"Saved PR plot: {pr_path}")
+        if generate_plots:
+                print(f"Saved ROC plot: {roc_path}")
+                print(f"Saved PR plot: {pr_path}")
         print(f"Saved metrics to DuckDB: {db_path}")
 
-        plt.show()
+        if generate_plots:
+            plt.show()
 
         return metrics_df
 
@@ -1515,7 +1704,7 @@ class MainMenu(cmd.Cmd):
         N_baseline_session = num_users
 
         # Assuming Max of 10% of misconfigurations for fine grained analysis
-        max_perc_misconfig_sessions = 0.10
+        max_perc_misconfig_sessions = 0.1
         num_misconfig = int(max_perc_misconfig_sessions * num_users)
         high_value_target_name = "DOMAIN ADMINS@TESTLAB.LOCALE"
 
@@ -1524,13 +1713,15 @@ class MainMenu(cmd.Cmd):
         base_filename = os.path.splitext(os.path.basename(self.parameters_json_path))[0]
 
         for itr in range(self.R):
-            if mode == "isolated":
+            if mode == "isolated" or mode == "combined":
                 init_experiment_state()
             else:
                 restore_experiment_state(itr)
             # init_experiment_state()
             networkx_graph = create_networkx_graph()
-
+            used_mitigation_cost = 0
+            removed_mitigation_count = 0
+            injection_family = "session"
             misconfig_growth_metrics = {}
             for misconfig_session_count in range(1, num_misconfig + 1):
                 print(f"Injecting {misconfig_session_count}")
@@ -1566,6 +1757,24 @@ class MainMenu(cmd.Cmd):
                     high_value_target_name,
                     L=4,
                 )
+                if self.mitigation_enabled :
+                            misconfig_growth_metrics, used_mitigation_cost, removed_mitigation_count = (
+                                apply_online_mitigation_if_triggered(
+                                    metrics=misconfig_growth_metrics,
+                                    step=misconfig_session_count,
+                                    p=p,
+                                    injection_family=injection_family,
+                                    high_value_target_name=high_value_target_name,
+                                    num_users=num_users,
+                                    num_computers=num_computers,
+                                    mitigation_enabled=getattr(self, "mitigation_enabled", False),
+                                    mitigation_condition=getattr(self, "mitigation_condition", None),
+                                    mitigation_budget=getattr(self, "mitigation_budget", 100),
+                                    used_cost=used_mitigation_cost,
+                                    removed_count=removed_mitigation_count,
+                                    rise_streak_k=getattr(self, "mitigation_rise_streak_k", 2),
+                                )
+                            )
 
                 # print("PBCC:", pbcc_result["pbcc"])
                 # print("Successful mixed paths:", pbcc_result["successful_paths"])
@@ -1606,7 +1815,7 @@ class MainMenu(cmd.Cmd):
             misconfig_metrics_per_itr[itr] = misconfig_growth_metrics
             save_experiment_state(itr)
             # if itr == 0:
-            saveTofile(self, f"session-{itr}-{base_filename}.json")
+            # saveTofile(self, f"session-{itr}-{base_filename}.json")
 
             # run_df, run_csv_path = save_iteration_csv(run_rows, out_dir="analysis/csv", base_filename=base_filename,itr=itr, )
             # logging.info("Saved iteration CSV: %s", run_csv_path)
@@ -1665,9 +1874,9 @@ class MainMenu(cmd.Cmd):
                 plot_type="line"
             )
 
-        save_all_experiment_states_to_json(
-            f"/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/generated_datasets/experiment_session_{self.experiment_id}.json",
-        )
+        # save_all_experiment_states_to_json(
+        #     f"/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/generated_datasets/experiment_session_{self.experiment_id}.json",
+        # )
 
         chart_metadata = {"Injection": "session", "mode": "isolated", "base": base_filename,
                           "total_misconfigs": num_misconfig, "seed_number": self.seed_number, }
@@ -1758,7 +1967,8 @@ class MainMenu(cmd.Cmd):
         misconfig_perc = get_perc_param_value("perc_misconfig_permissions", self.level, self.parameters) / 100
         # num_misconfig = int(misconfig_perc * num_users)
         # num_misconfig = 10
-        num_misconfig = int(misconfig_perc * num_users)
+        # num_misconfig = int(misconfig_perc * num_users)
+        num_misconfig = int(0.001 * num_users)
         misconfig_to_tier_0_allow, misconfig_to_tier_0_limit = get_misconfig_dict_param_value(
             "misconfig_permissions_to_tier_0", self.parameters)
 
@@ -1904,9 +2114,9 @@ class MainMenu(cmd.Cmd):
                 plot_type="line"
             )
 
-        save_all_experiment_states_to_json(
-            f"/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/generated_datasets/experiment_i_perm_{self.experiment_id}.json",
-        )
+        # save_all_experiment_states_to_json(
+        #     f"/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/generated_datasets/experiment_i_perm_{self.experiment_id}.json",
+        # )
         chart_metadata = {"Injection": "Individual permission", "mode": "isolated", "base": base_filename,
                           "total_misconfigs": num_misconfig, "seed_number": self.seed_number, }
 
@@ -2072,7 +2282,7 @@ class MainMenu(cmd.Cmd):
                 min_points=5,
             )
             misconfig_growth_metrics = {row["step"]: row for row in metrics_with_jump_label}
-            misconfig_metrics_per_itr[f"gp-{itr}"] = misconfig_growth_metrics
+            misconfig_metrics_per_itr[itr] = misconfig_growth_metrics
             save_experiment_state(itr)
             # saveTofile(self, f"grp_permission-{itr}-{base_filename}.json")
 
@@ -2126,9 +2336,9 @@ class MainMenu(cmd.Cmd):
                 plot_type="line"
             )
 
-        save_all_experiment_states_to_json(
-            f"/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/generated_datasets/experiment_g_perm_{self.experiment_id}.json",
-        )
+        # save_all_experiment_states_to_json(
+        #     f"/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/generated_datasets/experiment_g_perm_{self.experiment_id}.json",
+        # )
         chart_metadata = {"Injection": "Group permission", "mode": "isolated", "base": base_filename,
                           "total_misconfigs": num_misconfig, "seed_number": self.seed_number, }
 
@@ -2194,7 +2404,8 @@ class MainMenu(cmd.Cmd):
         misconfig_metrics_per_itr = {}
 
         base_filename = os.path.splitext(os.path.basename(self.parameters_json_path))[0]
-
+        if num_misconfig == 0:
+            return
         for itr in range(self.R):
             if mode == "isolated":
                 init_experiment_state()
@@ -2265,9 +2476,10 @@ class MainMenu(cmd.Cmd):
             )
 
             misconfig_growth_metrics = {row["step"]: row for row in metrics_with_jump_label}
-            misconfig_metrics_per_itr[f"gn -{itr}"] = misconfig_growth_metrics
+            misconfig_metrics_per_itr[itr] = misconfig_growth_metrics
             save_experiment_state(itr)
             # saveTofile(self, f"grp_nesting-{itr}-{base_filename}.json")
+
 
         all_rows = []
         for itr in sorted(misconfig_metrics_per_itr.keys()):
@@ -2317,9 +2529,9 @@ class MainMenu(cmd.Cmd):
                 plot_type="line"
             )
 
-        save_all_experiment_states_to_json(
-            f"/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/generated_datasets/experiment_g_nest_{self.experiment_id}.json",
-        )
+        # save_all_experiment_states_to_json(
+        #     f"/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/generated_datasets/experiment_g_nest_{self.experiment_id}.json",
+        # )
 
         chart_metadata = {"Injection": "Group nesting", "mode": "isolated", "base": base_filename,
                           "total_misconfigs": num_misconfig, "seed_number": self.seed_number, }
@@ -2381,6 +2593,9 @@ class MainMenu(cmd.Cmd):
         filename = parts[0] if len(parts) > 0 else ""
         clear_exp_neo4j_db(self.driver.session())
         load_graph_from_file(self.driver.session(), filename)
+
+    def do_analyse_percolation(self, args):
+        analyse_percolation_from_duckdb(str(Path.home() / "adsynth_metrics.duckdb"),"analysis/csv","2026-06-03 12:00:00","2026-06-03 18:00:00")
 def saveTofile(self, filename):
     with open(
             f"/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/generated_datasets/{filename}",
