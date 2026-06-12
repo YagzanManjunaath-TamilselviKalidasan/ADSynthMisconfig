@@ -60,8 +60,9 @@ def create_dc_sessions(domain_controllers, server_operators, print_operators):
     for OP in server_operators + print_operators:
         for DC in domain_controllers:
             if random.choice([True, False]):
-                start_index = get_node_index(OP + "_User", "name")
-                end_index = get_node_index(DC + "_Computer", "name")
+
+                end_index = get_node_index(OP + "_User", "name")
+                start_index = get_node_index(DC + "_Computer", "name")
                 rel_type = "HasSession"
                 edge_operation(start_index, end_index, rel_type)
  

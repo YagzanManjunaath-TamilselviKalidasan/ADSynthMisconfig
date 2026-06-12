@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Local HTML Viewer – Group Toggle</title>
+    <style>
+        body {
+            margin: 0;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            font-family: system-ui, sans-serif;
+        }
+
+        #controls {
+            background: #222;
+            color: #fff;
+            padding: 10px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        .nav-buttons {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        button {
+            background: #4CAF50;
+            border: none;
+            color: white;
+            padding: 8px 14px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+
+        button:hover {
+            background: #45a049;
+        }
+
+        button.active {
+            background: #2e7d32;
+        }
+
+        #viewer {
+            flex: 1;
+            width: 100%;
+            border: none;
+        }
+
+        #fileList {
+            background: #f2f2f2;
+            border-top: 1px solid #ccc;
+            max-height: 220px;
+            overflow-y: auto;
+            padding: 8px;
+            display: none;
+        }
+
+        details {
+            margin-bottom: 5px;
+            background: #e9e9e9;
+            border-radius: 5px;
+            padding: 5px;
+        }
+
+        summary {
+            font-weight: bold;
+            cursor: pointer;
+            padding: 4px;
+            background: #ddd;
+            border-radius: 4px;
+        }
+
+        .file-item {
+            padding: 6px 10px;
+            margin: 2px 0;
+            background: #fff;
+            border-radius: 4px;
+            cursor: pointer;
+            border: 1px solid #ddd;
+        }
+
+        .file-item:hover {
+            background: #e6f7ff;
+        }
+
+        .file-item.active {
+            background: #cce5ff;
+            border-color: #66b3ff;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+<div id="controls">
+    <div>📁 <span id="folderName">No folder selected</span></div>
+    <div class="nav-buttons">
+        <button id="chooseFolder">Choose Folder</button>
+        <button id="groupByName" class="active">Group by Name</button>
+        <button id="groupByIter">Group by Iteration</button>
+        <button id="prevBtn" disabled>← Prev</button>
+        <button id="nextBtn" disabled>Next →</button>
+    </div>
+</div>
+
+<div id="fileList"></div>
+<iframe id="viewer"></iframe>
+
+<script>
+    let htmlFiles = [];
+    let index = 0;
+    let currentGroupFiles = [];
+    let currentGroupName = null;
+    let currentGrouping = "name";
+
+    const groupsByName = {
+        "permission-i-": "Permission (Individual)",
+        "permission-g-": "Permission (Group)",
+        "session-": "Session",
+        "grp-nesting-": "Group Nesting",
+        "others": "Other Files"
+    };
+
+    const chooseBtn = document.getElementById("chooseFolder");
+    const groupNameBtn = document.getElementById("groupByName");
+    const groupIterBtn = document.getElementById("groupByIter");
+    const prevBtn = document.getElementById("prevBtn");
+    const nextBtn = document.getElementById("nextBtn");
+    const viewer = document.getElementById("viewer");
+    const folderName = document.getElementById("folderName");
+    const fileList = document.getElementById("fileList");
+
+    async function chooseFolder() {
+        try {
+            if (window.location.protocol === "file:") {
+                alert("⚠️ Folder access requires serving this file via localhost or HTTPS.\nRun: python3 -m http.server 8000");
+                return;
+            }
+
+            const dirHandle = await window.showDirectoryPicker();
+            folderName.textContent = dirHandle.name;
+            htmlFiles = [];
+
+            for await (const entry of dirHandle.values()) {
+                if (entry.kind === "file" && entry.name.endsWith(".html")) {
+                    const file = await entry.getFile();
+                    const url = URL.createObjectURL(file);
+                    htmlFiles.push({name: entry.name, url});
+                }
+            }
+
+            if (htmlFiles.length === 0) {
+                alert("No HTML files found in this folder.");
+                fileList.style.display = "none";
+                prevBtn.disabled = nextBtn.disabled = true;
+                return;
+            }
+
+            renderGroupedFileList();
+            fileList.style.display = "block";
+            prevBtn.disabled = nextBtn.disabled = false;
+            openFile(0);
+        } catch (err) {
+            console.error(err);
+            alert("Folder access was cancelled or blocked.");
+        }
+    }
+
+    function renderGroupedFileList() {
+        fileList.innerHTML = "";
+
+        if (currentGrouping === "name") renderGroupByName();
+        else renderGroupByIteration();
+    }
+
+    function renderGroupByName() {
+        const grouped = {};
+        for (const gKey in groupsByName) grouped[gKey] = [];
+
+        htmlFiles.forEach((f) => {
+            const foundKey = Object.keys(groupsByName).find((k) =>
+                f.name.startsWith(k)
+            );
+            if (foundKey) grouped[foundKey].push(f);
+            else grouped["others"].push(f);
+        });
+
+        // helper: extract iteration number like -3-, -10-, -5-secure_1k
+        function extractIteration(name) {
+            const match = name.match(/-(\d+)(?=[-_.]|$)/);
+            return match ? parseInt(match[1]) : 0;
+        }
+
+        for (const [key, title] of Object.entries(groupsByName)) {
+            const files = grouped[key];
+            if (!files || files.length === 0) continue;
+
+            // 🔢 numeric sort within group
+            files.sort((a, b) => extractIteration(a.name) - extractIteration(b.name));
+
+            const details = document.createElement("details");
+            details.open = true;
+            const summary = document.createElement("summary");
+            summary.textContent = title;
+            details.appendChild(summary);
+
+            files.forEach((f) => {
+                const globalIndex = htmlFiles.findIndex(x => x.name === f.name);
+                const item = document.createElement("div");
+                item.className = "file-item";
+                item.textContent = f.name;
+                item.addEventListener("click", () => {
+
+                    const groupItems = Array.from(details.querySelectorAll(".file-item"));
+                    currentGroupFiles = groupItems.map(el => el.textContent);
+                    currentGroupName = summary.textContent;
+                    openFile(globalIndex);
+                });
+                details.appendChild(item);
+            });
+
+            fileList.appendChild(details);
+        }
+    }
+
+    function getIterationFromName(filename) {
+        const base = filename.replace(/\.(html?|HTML?)$/, ""); // strip .html/.htm
+        const parts = base.split("-");
+        for (let i = parts.length - 1; i >= 0; i--) {
+            if (/^\d+$/.test(parts[i])) return parts[i];
+        }
+        return null;
+    }
+
+    function renderGroupByIteration() {
+        const grouped = {};
+
+        // group by iteration number
+        htmlFiles.forEach((f) => {
+            const iter = getIterationFromName(f.name);
+            const key = iter ? `Iteration ${iter}` : "No Iteration";
+            (grouped[key] ||= []).push(f);
+        });
+
+        // define custom prefix order
+        const prefixOrder = ["session-", "permission-i-", "permission-g-", "grp-nesting-"];
+
+        Object.entries(grouped)
+            // sort iteration groups numerically (ascending)
+            .sort(([a], [b]) => {
+                const na = parseInt(a.replace(/\D/g, "")) || 0;
+                const nb = parseInt(b.replace(/\D/g, "")) || 0;
+                return na - nb;
+            })
+            .forEach(([groupKey, files]) => {
+                const details = document.createElement("details");
+                details.open = true;
+                const summary = document.createElement("summary");
+                summary.textContent = groupKey;
+                details.appendChild(summary);
+
+                // sort by prefix order, then numeric part inside same prefix
+                files.sort((a, b) => {
+                    const ai = prefixOrder.findIndex(p => a.name.startsWith(p));
+                    const bi = prefixOrder.findIndex(p => b.name.startsWith(p));
+                    if (ai !== bi) return (ai === -1 ? 999 : ai) - (bi === -1 ? 999 : bi);
+
+                    // extract numeric component after prefix
+                    const na = parseInt(a.name.replace(/\D*(\d+).*/, "$1")) || 0;
+                    const nb = parseInt(b.name.replace(/\D*(\d+).*/, "$1")) || 0;
+                    return na - nb;
+                });
+
+                // render files
+                files.forEach((f) => {
+                    const idx = htmlFiles.findIndex(x => x.name === f.name);
+                    const item = document.createElement("div");
+                    item.className = "file-item";
+                    item.textContent = f.name;
+                    item.addEventListener("click", () => {
+
+                    const groupItems = Array.from(details.querySelectorAll(".file-item"));
+                    currentGroupFiles = groupItems.map(el => el.textContent);
+                    currentGroupName = summary.textContent;
+                    openFile(idx);
+                });
+                    details.appendChild(item);
+                });
+
+                fileList.appendChild(details);
+            });
+    }
+
+    function highlightActive(index) {
+        document.querySelectorAll(".file-item").forEach((el) => {
+            el.classList.remove("active");
+        });
+        const activeItem = Array.from(document.querySelectorAll(".file-item"))
+            .find(el => el.textContent === htmlFiles[index].name);
+        if (activeItem) activeItem.classList.add("active");
+    }
+
+    function openFile(i) {
+        index = i;
+        viewer.src = htmlFiles[index].url;
+        highlightActive(index);
+    }
+
+    prevBtn.addEventListener("click", () => {
+  if (htmlFiles.length === 0) return;
+
+  if (currentGroupFiles.length > 0) {
+    // Navigate within current group
+    const currentName = htmlFiles[index].name;
+    const pos = currentGroupFiles.indexOf(currentName);
+    const prevIndexInGroup = (pos - 1 + currentGroupFiles.length) % currentGroupFiles.length;
+    const prevFileName = currentGroupFiles[prevIndexInGroup];
+    const globalIndex = htmlFiles.findIndex(f => f.name === prevFileName);
+    openFile(globalIndex);
+  } else {
+    // fallback: global cycle
+    index = (index - 1 + htmlFiles.length) % htmlFiles.length;
+    openFile(index);
+  }
+});
+
+nextBtn.addEventListener("click", () => {
+  if (htmlFiles.length === 0) return;
+
+  if (currentGroupFiles.length > 0) {
+
+    const currentName = htmlFiles[index].name;
+    const pos = currentGroupFiles.indexOf(currentName);
+    const nextIndexInGroup = (pos + 1) % currentGroupFiles.length;
+    const nextFileName = currentGroupFiles[nextIndexInGroup];
+    const globalIndex = htmlFiles.findIndex(f => f.name === nextFileName);
+    openFile(globalIndex);
+  } else {
+
+    index = (index + 1) % htmlFiles.length;
+    openFile(index);
+  }
+});
+
+
+    groupNameBtn.addEventListener("click", () => {
+        currentGrouping = "name";
+        groupNameBtn.classList.add("active");
+        groupIterBtn.classList.remove("active");
+        renderGroupedFileList();
+        highlightActive(index);
+    });
+
+    groupIterBtn.addEventListener("click", () => {
+        currentGrouping = "iter";
+        groupIterBtn.classList.add("active");
+        groupNameBtn.classList.remove("active");
+        renderGroupedFileList();
+        highlightActive(index);
+    });
+
+    chooseBtn.addEventListener("click", chooseFolder);
+
+    document.addEventListener("keydown", (e) => {
+        if (htmlFiles.length === 0) return;
+        if (e.key === "ArrowLeft") prevBtn.click();
+        else if (e.key === "ArrowRight") nextBtn.click();
+    });
+</script>
+</body>
+</html>
