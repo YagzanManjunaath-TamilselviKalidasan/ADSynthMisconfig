@@ -5,6 +5,8 @@ from pathlib import Path
 
 from adsynth.ADSynth import MainMenu
 
+from adsynth.config import DUCKDB_FILE_NAME
+
 
 class MitigationRunner:
     def __init__(self, parent):
@@ -20,7 +22,7 @@ class MitigationRunner:
         self.x_star_var = tk.StringVar(value="0.5")
         self.fixed_p_var = tk.StringVar(value="0.02,0.05,0.10")
         self.duckdb_path_var = tk.StringVar(
-            value=str(Path.home() / "adsynth_metrics.duckdb")
+            value=str(Path.home() / DUCKDB_FILE_NAME)
         )
 
         self._build_ui()
