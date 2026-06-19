@@ -571,7 +571,7 @@ ORDER BY p;
 ---
 ## 14. Variance peak intensity
 
-```
+```sql
 WITH base AS (
     SELECT
         p,
@@ -605,7 +605,7 @@ ORDER BY p;
 ---
 
 ## 15. Compare unmitigated vs mitigated
-```
+```sql
 SELECT
     experiment_id,
     injection_type,
@@ -627,7 +627,7 @@ GROUP BY
     injection_type;
 ```
 
-```
+```sql
 
 WITH base AS (
   SELECT
@@ -657,7 +657,7 @@ ORDER BY
   p
 ```
 
-```
+```sql
 WITH base AS (
     SELECT
         p,
