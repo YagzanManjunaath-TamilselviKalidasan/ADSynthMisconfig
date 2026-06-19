@@ -285,20 +285,9 @@ def calc_thresholds_and_jump_labels_for_iteration(
     for k, v in thresholds.items():
         print(f"{k}: {v}")
 
-    label_specs = ["J_k5_d0.1", "J_k5_d0.2", "J_k10_d0.1", "J_k10_d0.2"]
-    datasets = {}
 
-    # for label_name in label_specs:
-    #     X, y = build_prediction_dataset(metrics_ready, label_name)
-    #     datasets[label_name] = {"X": X, "y": y}
-    #
-    #     print(f"Iteration {itr} | {label_name}: X={X.shape}, y={y.shape}")
-    #
-    #     if evaluate and X.shape[0] > 0 and len(np.unique(y)) > 1:
-    #         print(f"Evaluating logistic regression for iteration {itr}, label {label_name}")
-    #         evaluate_logreg(X, y)
 
-    return metrics_ready, thresholds, datasets
+    return metrics_ready, thresholds
 
 
 
@@ -495,14 +484,7 @@ def run_logreg_df(df, target_col="high_exposure_label", feature_cols=None):
         stratify=y,
     )
 
-    # split_idx = int(len(data) * 0.7)
-    # train_df = data.iloc[:split_idx]
-    # test_df = data.iloc[split_idx:]
-    # X_train = train_df[feature_cols]
-    # y_train = train_df[target_col].astype(int)
-    #
-    # X_test = test_df[feature_cols]
-    # y_test = test_df[target_col].astype(int)
+
 
     model = Pipeline([
         ("scaler", StandardScaler()),

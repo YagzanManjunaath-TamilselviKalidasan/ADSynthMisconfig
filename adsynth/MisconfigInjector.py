@@ -23,7 +23,7 @@ class MisconfigInjector(cmd.Cmd):
         self.NODES = []
         self.EDGES = []
         self.parameters_json_path = "DEFAULT"
-        # todo Get params from user
+
         self.parameters = DEFAULT_CONFIGURATIONS 
         self.json_file_name = None
         self.json_path = None
@@ -103,8 +103,7 @@ class MisconfigInjector(cmd.Cmd):
         nTiers = get_num_tiers(self.parameters)
         num_users = get_int_param_value("User", "nUsers", self.parameters)
 
-        # todo Change after getting Custom params
-        # create_misconfig_sessions(nTiers, self.level,self.parameters, num_users)
+
 
         create_misconfig_sessions_multi_tiers(nTiers,self.level,self.parameters,num_users)
         return

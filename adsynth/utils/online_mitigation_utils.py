@@ -10,7 +10,7 @@ from adsynth.utils.ablation_study_utils import (
     exposure_computers,
     compute_delta_X,
     compute_rise_metrics,
-    pbcc_bounded_bfs_tier2_computers_debug,
+    pbcc_bounded_bfs_tier2_computers,
 )
 
 from adsynth.utils.networkx_utils import (
@@ -18,10 +18,6 @@ from adsynth.utils.networkx_utils import (
     find_user_count_with_path_to_DA,
 )
 
-
-# ============================================================
-# Existing mitigation policy components, generalised
-# ============================================================
 
 ACTION_SETS = {
     "sessions_only": {"HasSession"},
@@ -291,7 +287,7 @@ def online_alarm_triggered(
 ):
     row = metrics.get(step, {})
 
-    # If alarm columns already exist, respect them.
+    # If alarm columns already exist, consider them.
     if (
         row.get("A_HCI", 0)
         or row.get("A_CSM", 0)
@@ -357,7 +353,7 @@ def compute_step_metrics(
         1.0,
     )
 
-    pbcc_result = pbcc_bounded_bfs_tier2_computers_debug(
+    pbcc_result = pbcc_bounded_bfs_tier2_computers(
         networkx_graph,
         high_value_target_name,
         L=4,
@@ -386,7 +382,7 @@ def apply_online_mitigation_if_triggered(
     """
     Generic online mitigation hook.
 
-    Call this after one injection step has already been applied
+    Called  after one injection step has already been applied
     and the first version of that step's metrics has been computed.
 
     If alarm triggers:

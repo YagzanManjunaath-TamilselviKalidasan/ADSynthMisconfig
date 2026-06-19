@@ -6,6 +6,7 @@ import duckdb
 import pandas as pd
 
 import adsynth.DATABASE as DB
+from adsynth.ADSynth import DUCKDB_FILE_NAME
 from adsynth.EXPERIMENT_DATABASE import EXP_EDGES
 
 from adsynth.utils.ablation_study_utils import (
@@ -17,7 +18,7 @@ from adsynth.utils.ablation_study_utils import (
     compute_rise_metrics,
     compute_sigma2,
     populate_node_tiers,
-    pbcc_bounded_bfs_tier2_computers_debug,
+    pbcc_bounded_bfs_tier2_computers,
 )
 
 from adsynth.utils.database_utils import load_all_experiment_states_from_json
@@ -46,7 +47,7 @@ def run_cost_aware_mitigation_from_metrics(
     from datetime import datetime
 
     if out_duckdb_path is None:
-        out_duckdb_path = str(Path.home() / "adsynth_metrics.duckdb")
+        out_duckdb_path = str(Path.home() / DUCKDB_FILE_NAME)
     filename = Path(filepath).stem
 
     # experiment_session_exp_xxx.json
@@ -432,7 +433,7 @@ def run_cost_aware_mitigation_from_metrics(
             1.0,
         )
 
-        pbcc_result = pbcc_bounded_bfs_tier2_computers_debug(
+        pbcc_result = pbcc_bounded_bfs_tier2_computers(
             networkx_graph,
             high_value_target_name,
             L=4,
