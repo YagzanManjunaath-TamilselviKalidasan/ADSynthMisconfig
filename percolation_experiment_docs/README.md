@@ -205,14 +205,10 @@ Dataset generation creates a synthetic Active Directory graph from an ADSynth pa
 From the repository root:
 
 ```bash
-python -m ADSynthUI
+cd <YOUR_PATH>/ADSynthMisconfig
+PYTHONPATH=. python ui/ADSynthUI.py
 ```
 
-Alternatively:
-
-```bash
-python ADSynthUI.py
-```
 
 ## UI fields
 
@@ -262,13 +258,8 @@ The automated data-collection workflow generates multiple synthetic Active Direc
 From the repository root:
 
 ```bash
-python -m ADSynth
-```
-
-Alternatively:
-
-```bash
-python ADSynth.py
+cd <YOUR_PATH>/ADSynthMisconfig
+PYTHONPATH=. python -m adsynth
 ```
 
 At the ADSynth command prompt, run:
@@ -681,7 +672,8 @@ runmodels <CSV_FOLDER>
 Run the module containing `MainMenu`:
 
 ```bash
-python -m adsynth.ADSynth
+cd <YOUR_PATH>/ADSynthMisconfig
+PYTHONPATH=. python -m adsynth
 ```
 
 At the ADSynth prompt:
@@ -862,7 +854,8 @@ Start the local Neo4j database and verify APOC if graph import is required.
 ### 2. Open the UI
 
 ```bash
-python -m ui.ADSynthUI
+cd <YOUR_PATH>/ADSynthMisconfig
+PYTHONPATH=. python ui/ADSynthUI.py
 ```
 
 ### 3. Generate a graph
@@ -896,7 +889,8 @@ Mitigation: enabled
 ### 6. Train prediction models
 
 ```bash
-python -m adsynth.ADSynth
+cd <YOUR_PATH>/ADSynthMisconfig
+PYTHONPATH=. python -m adsynth
 ```
 
 Then:

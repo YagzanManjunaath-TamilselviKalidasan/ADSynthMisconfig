@@ -3,7 +3,9 @@ from tkinter import ttk, messagebox, filedialog
 import threading
 from pathlib import Path
 
-from adsynth.ADSynth import MainMenu, DUCKDB_FILE_NAME
+from adsynth.ADSynth import MainMenu
+
+from adsynth.config import DUCKDB_FILE_NAME
 
 
 class MitigationRunner:

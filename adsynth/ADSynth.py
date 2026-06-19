@@ -106,7 +106,9 @@ from sklearn.metrics import (
     confusion_matrix
 )
 
-DUCKDB_FILE_NAME = DUCKDB_FILE_NAME
+from adsynth.config import DUCKDB_FILE_NAME
+
+
 def delete_neo4j_data(session):
     try:
         query = '''
@@ -342,6 +344,15 @@ class MainMenu(cmd.Cmd):
     def help_exit(self):
         print("Exit")
 
+    def help_collect_data(self):
+        print("The automated data-collection workflow generates multiple synthetic Active Directory graphs and runs predefined misconfiguration-injection experiments across selected graph configurations, random seeds, initial graph variants, and injection schedules.")
+
+    def help_isolated_injection(self):
+            print("Run individual misconfigurations and export netrics to DuckDB")
+    def help_load_neo4jFromJson(self):
+            print("Load graph data in json to Neo4j ")
+    def help_runmodels(self):
+            print("Prediction runs logistic-regression models over experiment CSV files.")
     # def help_remove_constraints(self):
     #     print("Remove Neo4J constraints")
 
@@ -1017,18 +1028,18 @@ class MainMenu(cmd.Cmd):
     }
 
     DATA_COLLECTION_GRAPHS = {
-        # "set_1": {
-        #     "vul_1k": "/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/adsynth/experiment_params/vul_1k.json",
-        #     "secure_1k": "/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/adsynth/experiment_params/secure_1k.json",
-        # },
-        "set_2": {
+        "set_1": {
+            "vul_1k": "/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/adsynth/experiment_params/vul_1k.json",
+            "secure_1k": "/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/adsynth/experiment_params/secure_1k.json",
+        },
+        # "set_2": {
             # "vul_5k": "/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/adsynth/experiment_params/vul_5k.json",
             # "secure_5k": "/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/adsynth/experiment_params/secure_5k.json",
-        },
-        "set_3": {
-            "vul_100k": "/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/adsynth/experiment_params/vul_100k.json",
+        # },
+        # "set_3": {
+            # "vul_100k": "/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/adsynth/experiment_params/vul_100k.json",
             # "secure_100k": "/Users/yagzanmanjunaath/UniWorkspace/ResearchMethods/Part2/ADSynth/adsynth/experiment_params/secure_100k.json",
-        },
+        # },
     }
 
     DATA_COLLECTION_SCHEDULES = {
@@ -1806,7 +1817,7 @@ class MainMenu(cmd.Cmd):
                 metric_keys=("HCI", "CSM", "TBS"),
             )
 
-            metrics_with_jump_label, thresholds, datasets = calc_thresholds_and_jump_labels_for_iteration(
+            metrics_with_jump_label, thresholds = calc_thresholds_and_jump_labels_for_iteration(
                 misconfig_growth_metrics,
                 itr=itr,
                 baseline_fraction=0.2,
@@ -2005,7 +2016,7 @@ class MainMenu(cmd.Cmd):
                 metric_keys=("HCI", "CSM", "TBS"),
             )
 
-            metrics_with_jump_label, thresholds, datasets = calc_thresholds_and_jump_labels_for_iteration(
+            metrics_with_jump_label, thresholds = calc_thresholds_and_jump_labels_for_iteration(
                 misconfig_growth_metrics,
                 itr=itr,
                 baseline_fraction=0.2,
@@ -2221,7 +2232,7 @@ class MainMenu(cmd.Cmd):
                 metric_keys=("HCI", "CSM", "TBS"),
             )
 
-            metrics_with_jump_label, thresholds, datasets = calc_thresholds_and_jump_labels_for_iteration(
+            metrics_with_jump_label, thresholds = calc_thresholds_and_jump_labels_for_iteration(
                 misconfig_growth_metrics,
                 itr=itr,
                 baseline_fraction=0.2,
@@ -2414,7 +2425,7 @@ class MainMenu(cmd.Cmd):
                 metric_keys=("HCI", "CSM", "TBS"),
             )
 
-            metrics_with_jump_label, thresholds, datasets = calc_thresholds_and_jump_labels_for_iteration(
+            metrics_with_jump_label, thresholds = calc_thresholds_and_jump_labels_for_iteration(
                 misconfig_growth_metrics,
                 itr=itr,
                 baseline_fraction=0.2,

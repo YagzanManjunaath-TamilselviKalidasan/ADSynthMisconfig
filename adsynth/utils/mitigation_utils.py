@@ -6,7 +6,7 @@ import duckdb
 import pandas as pd
 
 import adsynth.DATABASE as DB
-from adsynth.ADSynth import DUCKDB_FILE_NAME
+
 from adsynth.EXPERIMENT_DATABASE import EXP_EDGES
 
 from adsynth.utils.ablation_study_utils import (
@@ -28,6 +28,9 @@ from adsynth.utils.networkx_utils import (
 )
 from adsynth.utils.parameters import get_int_param_value
 from adsynth.utils.prediction_utils import calc_thresholds_and_jump_labels_for_iteration
+
+from adsynth.config import DUCKDB_FILE_NAME
+
 
 def run_cost_aware_mitigation_from_metrics(
         self,

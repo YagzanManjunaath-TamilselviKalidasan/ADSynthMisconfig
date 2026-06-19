@@ -1,0 +1,1 @@
+DUCKDB_FILE_NAME = "adsynth_metrics.duckdb"
